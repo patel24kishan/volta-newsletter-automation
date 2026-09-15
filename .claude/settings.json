@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/feature-gate.sh",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
