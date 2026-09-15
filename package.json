@@ -1,0 +1,30 @@
+{
+  "name": "volta-newsletter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unattended weekly newsletter pipeline for Volta. Bader selects items and presses send; everything else runs on its own.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "gate": "npm run typecheck && npm test",
+    "check:sources": "tsx src/cli/check-sources.ts",
+    "demo:week": "tsx src/cli/demo-week.ts",
+    "demo": "tsx src/cli/demo-serve.ts",
+    "fixtures:record": "tsx src/cli/record-fixtures.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "timezone": "America/Halifax",
+  "send_day": "monday",
+  "reminder_time": "08:30",
+  "content_window_days": 7,
+  "events_window_days": 14,
+  "watchlist": ["Volta", "voltaeffect"],
+  "holiday_overrides": [],
+  "alert_recipients": ["bader", "maintainer"],
+  "sources": [
+    {
+      "id": "google-news",
+      "kind": "rss",
+      "type": "news",
+      "url": "https://news.google.com/rss/search?q=%22Volta%22+Halifax&hl=en-CA&gl=CA&ceid=CA:en",
+      "enabled": true
+    },
+    {
+      "id": "volta-calendar",
+      "kind": "ics",
+      "type": "event",
+      "url": "https://calendar.voltaeffect.com/api/calendar/ics",
+      "enabled": true
+    },
+    {
+      "id": "volta-linkedin",
+      "kind": "linkedin_company",
+      "type": "linkedin",
+      "url": "https://www.linkedin.com/company/voltaeffect/",
+      "enabled": true
+    }
+  ]
+}

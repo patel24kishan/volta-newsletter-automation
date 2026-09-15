@@ -55,6 +55,8 @@ Outputs: sent newsletter; weekly archive (items, selection, drafts, final); aler
 - **CLAUDE.md: approved with cuts (user).** Keep: purpose, nine constraints, build-order rule, dry-run default, first-workday rule, secrets, commands. Drop: layout and 4D process sections.
 - **Hooks: one feature-gate hook only (user).** Run tests after each feature, show results, block moving on until green. See section 8.
 
+- **Demo track (user, 2026-09-15).** Build a workable demo without the Volta unknowns, on **live data** (user: "data sourcing has to be real time"). Live Google News RSS and Volta's public ICS feed verified today; transcripts from a real folder; member and LinkedIn links from a real Slack channel; LinkedIn only as link submissions, local web page first then Slack adapter, and NO LLM: extractive summaries and template drafts, with a "needs summary?" flag Bader can set. See section 11.
+
 Still open for step 0: transcript tool location (C4), events source (C6), news watchlist (C7), hosting and maintainer (C8), newsletter shape and disclosure line (C9).
 
 ## 3. Clarifications that change the design
@@ -255,8 +257,91 @@ Not included on purpose: anything that changes weekly (source URLs, member list)
 
 **Approved with cuts:** sections 1-7 stay (purpose, constraints, build order, dry-run default, first-workday rule, secrets, commands). Sections 8 (layout) and 9 (process) are dropped.
 
+## 11. Demo track (approved direction; builds in `W:\AI Projects\Week 2\NewsLetter\`)
+
+### Goal
+A demo that runs the full weekly cycle end to end on **live data**, at zero cost, with no Volta answers, using the same fetcher, storage, summarizer, drafting and surface interfaces the production system will use. User requirement (2026-09-15): data sourcing has to be real time. No fixtures in the demo run. Fixtures exist only as recorded snapshots for deterministic unit tests.
+
+### Live sources verified today (read-only checks, 2026-09-15)
+| Source | Live endpoint | Credentials | Verified |
+|---|---|---|---|
+| News | Google News RSS: `https://news.google.com/rss/search?q="Volta"+Halifax&hl=en-CA&gl=CA&ceid=CA:en` | None | Yes. Valid RSS 2.0; 7 of the first 8 items are about Volta. One off-topic item (Ottawa AI funding) shows why a relevance filter and Bader's selection matter. Optional: a Google Alerts feed the user creates adds member-company coverage. |
+| Events | Volta's own public calendar: `https://calendar.voltaeffect.com/api/calendar/ics` (linked from voltaeffect.com/events) | None | Yes. Valid VCALENDAR, ~40 VEVENTs, UTC timestamps, no URL check yet. September 2026 events appear on the events page ("AI Showcase and Mixer" Sep 16, "Vibe Coding Meetup" Sep 21); the fetch tool truncated the file, so D3 confirms they are in the feed. Convert UTC to America/Halifax. |
+| CEO transcripts | **Back burner (user, 2026-09-15).** Not in the demo. Design kept in C4 for later. | | |
+| Volta's own LinkedIn posts | `https://www.linkedin.com/company/voltaeffect/` fetched as a guest (user-supplied source, 2026-09-15). The `/posts/` URL is a login wall; the main company page is not. | None | Yes. Raw HTML (338 KB, HTTP 200 with a browser User-Agent) contains post text and per-post permalinks such as `linkedin.com/posts/voltaeffect_..._activity-7505656961221419008-...`. The activity id's top bits are a millisecond timestamp, so absolute post dates are derivable without a `<time>` element. Caveats below. |
+| Member social + LinkedIn links via Slack | **Back burner (user, 2026-09-15).** Not in the demo. | | |
+| LLM | **Back burner (user, 2026-09-15).** Not used. Extractive summaries and template drafts. | | |
+
+Demo sources are therefore exactly three, all live and credential-free: Google News RSS, Volta's ICS calendar feed, Volta's LinkedIn company page.
+
+Eventbrite was checked and Volta has no organizer page there (404), so ICS is the events path.
+
+### What changes versus the production plan
+| Layer | Production | Demo | Why it is not throwaway |
+|---|---|---|---|
+| Sources | Live RSS, Calendar API, Drive folder, Slack API, LinkedIn page | **Live** Google News RSS, **live** Volta ICS feed, **live** Volta LinkedIn company page. Transcripts and member Slack channel on the back burner | Identical fetchers; production only adds config rows and the back-burner fetchers |
+| Summaries | LLM | **Extractive**: RSS description or first 1-2 sentences of the fetched text, trimmed to a length cap. Items where nothing usable is extracted get `needs_summary: true` and Bader is prompted to decide | Behind a `Summarizer` interface; an LLM adapter drops in later |
+| Drafts | LLM writes 2-3 drafts | **Templates**: three layouts (Brief, Standard, Events-first) rendered from selected items to HTML and Markdown. Sections with no items say "No [source] items this week" | Templates cannot invent anything, so constraint 5 holds by construction; LLM drafting later is an additional adapter |
+| Surface | Slack DM | **Local web page** first (`npm run demo`), Slack adapter second | Both implement the same `CurationSurface` interface |
+| Email handoff | Mailchimp | Writes `out/final.html` and `out/final.md` | `Publisher` interface; Mailchimp adapter later |
+| Storage | Firestore or D1 | SQLite in `out/` | `Storage` interface |
+| Scheduler | Cloud Scheduler | `npm run demo:week -- --date YYYY-MM-DD` with a clock override to show the holiday shift | Same `firstWorkday()` function |
+| Alerts | Slack DM | Console plus `out/alerts.log` | `Alerter` interface |
+
+### LinkedIn as a demo source: what is and is not possible
+- **Volta's own company page, live (user-requested, verified today).** A guest GET of the company page returns server-rendered HTML with recent posts, text, and permalinks. Fetcher: GET with a browser User-Agent, parse post blocks, derive the date from the activity id (`id >> 22` = Unix ms), keep text verbatim as `raw_excerpt`, permalink as `link`, type `linkedin`. Caveats stated plainly: (1) LinkedIn's User Agreement prohibits automated collection even of public pages, so this is Volta reading its own page and should be reviewed by Volta before production; (2) markup can change and guest rendering can flip to a login wall under rate limiting, so the fetcher must detect the login wall, alert loudly, and report "no LinkedIn items this week" rather than fail silently; (3) one request per weekly run, never polling. Tests run against a recorded snapshot of today's HTML plus a recorded login-wall page.
+- Not possible, and not built: automatically reading other people's LinkedIn posts. There is no API for it, unauthenticated fetches hit a login wall, and scraping violates LinkedIn's terms.
+- Possible and testable, and live: **link submissions**. A member or Bader drops a LinkedIn post URL (optionally with a note) into the Slack channel. The fetcher reads the channel live, validates the URL shape, extracts the poster slug and activity id from the URL, keeps the note verbatim, and produces an item whose link is the post itself. Content is whatever the submitter wrote; the item is marked `needs_summary: true` when there is no note. Real time: whatever is in the channel when the job runs.
+- Also possible: LinkedIn's personal data export (`Shares.csv`) for Volta's own account. Not real time (manual export), so out of the demo.
+- Tests: valid and invalid URL shapes, slug extraction, duplicate URLs, empty channel.
+
+### Test data (`test/fixtures/`, unit tests only, never used by the demo run)
+- Recorded snapshots of the live Google News RSS and Volta ICS responses, refreshed by `npm run fixtures:record`, so parser tests are deterministic while the demo stays live.
+- A recorded snapshot of Volta's LinkedIn company page HTML and a recorded login-wall page, for the D5a parser and its failure path.
+- `demo/config.json` (used by the demo run): the three live URLs, send day, alert recipients, watchlist, holiday overrides. Stands in for the Google Sheet through the same `Config` interface.
+- Back burner, not built now: transcript fixtures and a Slack `conversations.history` fixture.
+
+### Live-source pre-flight
+`npm run check:sources` hits every configured live source, reports item counts and the newest item date, and exits non-zero naming any source that failed or returned nothing. This is the Friday pre-flight from section 2, usable from day one.
+
+### Item schema (unchanged from production)
+`id, source, type (news|event|ceo_update|member_social|linkedin), date, title, summary, needs_summary, link, source_ref (file path or message id), confidence, requires_review, raw_excerpt`
+
+### Transcript extraction without an LLM
+Rule-based: split into sentences; keep sentences containing announcement cues (announce, launch, welcome, join, partner, program, cohort, open, event, milestone, congratulat); quote verbatim with the line number; mark `requires_review: true`; flag sentences containing confidentiality cues (revenue, ARR, salary, hire, fire, layoff, term sheet, confidential, NDA, valuation) as `confidence: low` and exclude from drafts by default. Tested with the fixture transcripts.
+
+### Local web curation page
+Single-page app served by a small Node HTTP server, no framework, no build step. Shows: reminder banner ("First workday: Tuesday, Monday was Thanksgiving" when applicable), candidate list grouped by source with checkboxes, `needs summary` toggle per item, "Generate drafts" button, the three drafts side by side, "Approve this one" writes `out/final.html`. Keyboard navigable, labels on every control, nothing by color alone (acceptance test 8).
+
+### Demo build order (one feature per turn, gate hook after each)
+D1. Skeleton: `package.json`, `tsconfig`, Vitest, ESLint, item schema, `Config` from `demo/config.json`, SQLite `Storage`, dry-run flag, `npm run gate`. First real exercise of the hook.
+D2. News fetcher: live Google News RSS (URL from config), relevance filter on the watchlist, recorded-snapshot tests, and `check:sources` reporting the live count.
+D3. Events fetcher: live Volta ICS feed, UTC to America/Halifax, 14-day window, snapshot tests, live count in `check:sources`.
+D4. LinkedIn company-page fetcher: live guest GET of Volta's page, post parsing, activity-id dating, login-wall detection with alert, snapshot tests, live count in `check:sources`.
+(Back burner, not in this demo: transcript fetcher with public-safe extractor; Slack channel fetcher for member and LinkedIn link submissions.)
+D5. Dedupe (URL normalization plus title similarity, including a LinkedIn post that links the same news story), extractive summarizer, ranking, plus tests.
+D6. No-fabrication verifier: every link, name and date in a draft must appear in the selected items; test with a seeded invented name to confirm it fails.
+D7. Draft templates (Brief, Standard, Events-first) with "no items" lines, HTML and Markdown output, plus tests.
+D8. `firstWorkday()` with `date-holidays` CA-NS and config overrides, `demo:week` runner honouring the clock override, console and file alerts, plus tests including 2026-10-12 (Thanksgiving Monday, so Tuesday 2026-10-13 is the first workday).
+D9. **Slack surface, required (user, 2026-09-15: "the demo has to be workable in Slack, connected").** Slack Bolt in Socket Mode, so no public URL or tunnel is needed on a laptop. The reminder DM carries the candidate list as checkboxes, a "Generate drafts" button, and the three drafts as follow-up messages with an "Approve" button that writes `out/final.html`. Needs the user's free Slack workspace: bot token plus app-level token. Exact click-through steps given at the start of D9.
+D10. Local web curation page as the fallback surface for when Slack is unavailable. Optional after D9.
+
+**Time override (user, 2026-09-15: "option to change date and time so I can test it today").** Built in D1 as `src/clock.ts`: `--now=<ISO>` on any command, or `DEMO_NOW` in `.env`. Every stage reads the clock through it: the content and event windows, the first-workday computation, and the reminder time. Example: `npm run demo:week -- --now=2026-10-13T08:30:00-03:00` behaves as the Tuesday after Thanksgiving.
+
+### What the demo proves and does not prove
+Proves: live fetching from three of Volta's real public sources (news coverage, calendar, LinkedIn page), the pipeline shape, the two-decision human loop, dedupe, the no-fabrication guard, the holiday rule, fail-loud alerts, and that adding a source is one fetcher plus one config row.
+Does not prove: Google Drive or Mailchimp authentication against Volta's accounts; LLM summary quality; production scheduling on a cloud host. Those are resolved per the main build plan once Volta answers.
+
+### User setup needed for the demo (all free)
+- Nothing for D1-D8. The pipeline through drafts and alerts runs with zero accounts.
+- Before D9: create a free Slack workspace and a Slack app with Socket Mode enabled, an app-level token with `connections:write`, and a bot token with `chat:write`, `im:write`, `users:read`. Put both tokens in `.env`. About ten minutes; exact click-through steps given at D9.
+
+### Demo run
+`npm run demo:week` fetches live from every configured source, writes `out/candidates.json`, `out/drafts/*.html`, `out/alerts.log`, and prints the first-workday computation for today's date. `npm run demo:week -- --date 2026-10-12` shows the Thanksgiving shift. `npm run demo` serves the curation page on localhost.
+
 ## Verification
 
+- Demo: `npm run demo:week` runs fetch through drafts from the live sources, writes `out/candidates.json`, `out/drafts/*.html`, `out/alerts.log`, and prints the first-workday shift. `npm run demo` serves the curation page; selecting items, generating, and approving one produces `out/final.html` with every item linked. Gate hook green after every feature.
 - Each fetcher: run against the real source in dry-run mode, assert non-empty schema-valid items with resolving links.
 - No-fabrication: automated verifier extracts named entities and dates from a draft and asserts each appears in the selected items' fetched text; test with a seeded draft containing an invented name to confirm it fails.
 - Weekly cycle: dry-run flag runs FETCH through DRAFT, writes to a staging Firestore collection, posts to a test Slack channel, creates nothing in Mailchimp.
