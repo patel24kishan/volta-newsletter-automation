@@ -33,6 +33,14 @@ export interface Item {
   raw_excerpt: string;
   /** Events only: venue or address as given by the source. */
   location?: string;
+  /** Other sources that carried the same story, attached by dedupe. Each keeps its own link. */
+  related?: RelatedLink[];
+}
+
+export interface RelatedLink {
+  source: string;
+  link: string;
+  title: string;
 }
 
 export interface ValidationResult {
@@ -67,6 +75,16 @@ export function validateItem(value: unknown): ValidationResult {
   bool("needs_summary");
   bool("requires_review");
   if ("location" in it && it.location !== undefined && typeof it.location !== "string") errors.push("location must be a string when present");
+  if ("related" in it && it.related !== undefined) {
+    if (!Array.isArray(it.related)) errors.push("related must be an array when present");
+    else for (const r of it.related as unknown[]) {
+      const o = r as Record<string, unknown>;
+      if (typeof o !== "object" || o === null || typeof o.source !== "string" || typeof o.title !== "string" || typeof o.link !== "string" || !isAbsoluteHttpUrl(o.link)) {
+        errors.push("related entries need source, title and an absolute http(s) link");
+        break;
+      }
+    }
+  }
 
   if (!ITEM_TYPES.includes(it.type as ItemType)) errors.push(`type must be one of ${ITEM_TYPES.join(", ")}`);
   if (!CONFIDENCE_LEVELS.includes(it.confidence as Confidence)) {

@@ -34,6 +34,12 @@ describe("SqliteStorage", () => {
     expect(got.map((i) => i.link)).toEqual(["https://x/2", "https://x/1"]);
   });
 
+  it("round-trips location and related links", () => {
+    const it = sampleItem({ location: "Volta, Halifax", related: [{ source: "x", link: "https://x/1", title: "t" }] });
+    s.upsertItems([it]);
+    expect(s.getItem(it.id)).toEqual(it);
+  });
+
   it("includes items stored at the exact window boundaries even when bounds omit milliseconds", () => {
     s.upsertItems([
       sampleItem({ link: "https://x/lo", date: "2026-09-10T00:00:00.000Z" }),
