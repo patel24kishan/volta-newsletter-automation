@@ -34,10 +34,11 @@ for (const source of config.sources) {
     console.log(`FAIL   ${source.id}  ${r.error}  (${ms} ms)`);
     continue;
   }
-  const newest = r.items[0]?.date ?? "-";
+  const edge = r.items[0]?.date ?? "-";
+  const edgeLabel = source.type === "event" ? "next" : "newest";
   const status = r.items.length === 0 ? "EMPTY " : "OK    ";
   if (r.items.length === 0) failures++;
-  console.log(`${status} ${source.id}  items=${r.items.length}  newest=${newest}  bytes=${r.bytes}  (${ms} ms)`);
+  console.log(`${status} ${source.id}  items=${r.items.length}  ${edgeLabel}=${edge}  bytes=${r.bytes}  (${ms} ms)`);
   for (const it of r.items.slice(0, 5)) console.log(`         - ${it.date.slice(0, 10)}  ${it.title}\n           ${it.link}`);
   if (r.items.length > 5) console.log(`         ... and ${r.items.length - 5} more`);
   for (const w of r.warnings) console.log(`         ! ${w}`);

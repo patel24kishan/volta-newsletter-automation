@@ -20,6 +20,7 @@
       "kind": "ics",
       "type": "event",
       "url": "https://calendar.voltaeffect.com/api/calendar/ics",
+      "fallback_link": "https://voltaeffect.com/events",
       "enabled": true
     },
     {

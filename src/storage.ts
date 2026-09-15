@@ -39,6 +39,7 @@ export class SqliteStorage implements Storage {
         confidence TEXT NOT NULL,
         requires_review INTEGER NOT NULL,
         raw_excerpt TEXT NOT NULL,
+        location TEXT,
         fetched_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS items_date ON items(date);
@@ -48,14 +49,14 @@ export class SqliteStorage implements Storage {
   upsertItems(items: Item[]): number {
     const stmt = this.db.prepare(`
       INSERT INTO items (id, source, type, date, title, summary, needs_summary, link, source_ref,
-                         confidence, requires_review, raw_excerpt, fetched_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         confidence, requires_review, raw_excerpt, location, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         source=excluded.source, type=excluded.type, date=excluded.date, title=excluded.title,
         summary=excluded.summary, needs_summary=excluded.needs_summary, link=excluded.link,
         source_ref=excluded.source_ref, confidence=excluded.confidence,
         requires_review=excluded.requires_review, raw_excerpt=excluded.raw_excerpt,
-        fetched_at=excluded.fetched_at
+        location=excluded.location, fetched_at=excluded.fetched_at
     `);
     const now = new Date().toISOString();
     let n = 0;
@@ -66,7 +67,7 @@ export class SqliteStorage implements Storage {
         if (!v.ok) throw new StorageError(`refusing to store invalid item ${String(it.id)}: ${v.errors.join("; ")}`);
         stmt.run(
           it.id, it.source, it.type, it.date, it.title, it.summary, it.needs_summary ? 1 : 0,
-          it.link, it.source_ref, it.confidence, it.requires_review ? 1 : 0, it.raw_excerpt, now,
+          it.link, it.source_ref, it.confidence, it.requires_review ? 1 : 0, it.raw_excerpt, it.location ?? null, now,
         );
         n++;
       }
@@ -101,7 +102,7 @@ export class SqliteStorage implements Storage {
 }
 
 function rowToItem(r: Record<string, unknown>): Item {
-  return {
+  const item: Item = {
     id: r.id as string,
     source: r.source as string,
     type: r.type as Item["type"],
@@ -115,4 +116,6 @@ function rowToItem(r: Record<string, unknown>): Item {
     requires_review: r.requires_review === 1,
     raw_excerpt: r.raw_excerpt as string,
   };
+  if (typeof r.location === "string") item.location = r.location;
+  return item;
 }

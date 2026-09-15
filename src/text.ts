@@ -22,6 +22,23 @@ export function collapseWhitespace(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Extractive summary: the first N sentences of a text, cut to maxChars at a word boundary.
+ * Returns "" when there is no usable text, so callers can flag needs_summary.
+ */
+export function firstSentences(text: string, n: number, maxChars: number): string {
+  const clean = collapseWhitespace(text);
+  if (!clean) return "";
+  const sentences = clean.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) ?? [clean];
+  let out = sentences.slice(0, n).join("").trim();
+  if (out.length > maxChars) {
+    out = out.slice(0, maxChars);
+    const cut = out.lastIndexOf(" ");
+    out = (cut > maxChars / 2 ? out.slice(0, cut) : out).replace(/[,;:\s]+$/, "") + "…";
+  }
+  return out;
+}
+
 /** Case-insensitive: does the text mention any watchlist term? Empty watchlist matches everything. */
 export function mentionsAny(text: string, terms: string[]): boolean {
   if (terms.length === 0) return true;

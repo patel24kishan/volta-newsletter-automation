@@ -31,6 +31,8 @@ export interface Item {
   requires_review: boolean;
   /** Verbatim text retrieved from the source; the verifier checks drafts against this. */
   raw_excerpt: string;
+  /** Events only: venue or address as given by the source. */
+  location?: string;
 }
 
 export interface ValidationResult {
@@ -64,6 +66,7 @@ export function validateItem(value: unknown): ValidationResult {
   str("raw_excerpt", true);
   bool("needs_summary");
   bool("requires_review");
+  if ("location" in it && it.location !== undefined && typeof it.location !== "string") errors.push("location must be a string when present");
 
   if (!ITEM_TYPES.includes(it.type as ItemType)) errors.push(`type must be one of ${ITEM_TYPES.join(", ")}`);
   if (!CONFIDENCE_LEVELS.includes(it.confidence as Confidence)) {

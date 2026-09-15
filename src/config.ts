@@ -14,6 +14,8 @@ export interface SourceConfig {
   type: ItemType;
   url: string;
   enabled: boolean;
+  /** Human-facing page to link when an individual item has no URL of its own (events feeds). */
+  fallback_link?: string;
 }
 
 export interface Config {
@@ -105,6 +107,9 @@ export function validateConfig(value: unknown, where = "config"): Config {
       if (typeof src.type !== "string") errors.push(`sources[${i}].type missing`);
       if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) errors.push(`sources[${i}].url must be http(s)`);
       if (typeof src.enabled !== "boolean") errors.push(`sources[${i}].enabled must be boolean`);
+      if (src.fallback_link !== undefined && (typeof src.fallback_link !== "string" || !/^https?:\/\//.test(src.fallback_link))) {
+        errors.push(`sources[${i}].fallback_link must be an http(s) URL when present`);
+      }
     });
   }
 
