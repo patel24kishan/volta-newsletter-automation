@@ -317,7 +317,8 @@ Single-page app served by a small Node HTTP server, no framework, no build step.
 D1. Skeleton: `package.json`, `tsconfig`, Vitest, ESLint, item schema, `Config` from `demo/config.json`, SQLite `Storage`, dry-run flag, `npm run gate`. First real exercise of the hook.
 D2. News fetcher: live Google News RSS (URL from config), relevance filter on the watchlist, recorded-snapshot tests, and `check:sources` reporting the live count.
 D3. Events fetcher: live Volta ICS feed, UTC to America/Halifax, 14-day window, snapshot tests, live count in `check:sources`.
-D4. LinkedIn company-page fetcher: live guest GET of Volta's page, post parsing, activity-id dating, login-wall detection with alert, snapshot tests, live count in `check:sources`.
+D4. LinkedIn company-page fetcher: live guest GET of Volta's page, post parsing, activity-id dating, login-wall detection with alert, snapshot tests, live count in `check:sources`. **DONE 2026-09-15.** Finding at build time: the page embeds JSON-LD `DiscussionForumPosting` nodes with absolute `datePublished`, permalink and full text, so that is the primary parse and activity-id dating is the fallback. The `/posts/` URL returns HTTP 999 (bot block) with an authwall body; recorded as a fixture for the failure path. Live: 8 posts in the last 7 days.
+Status: D1-D4 done and committed (`14a5c8e`, `19c7985`, `aa56853`, `bdeae68` review fixes, D4). 63 tests.
 (Back burner, not in this demo: transcript fetcher with public-safe extractor; Slack channel fetcher for member and LinkedIn link submissions.)
 D5. Dedupe (URL normalization plus title similarity, including a LinkedIn post that links the same news story), extractive summarizer, ranking, plus tests.
 D6. No-fabrication verifier: every link, name and date in a draft must appear in the selected items; test with a seeded invented name to confirm it fails.
