@@ -1,11 +1,13 @@
 import type { SourceConfig } from "../config.js";
 import { IcsFetcher } from "./ics.js";
+import { LinkedInCompanyFetcher } from "./linkedin.js";
 import { RssFetcher } from "./rss.js";
 import type { Fetcher } from "./types.js";
 
 const registry: Partial<Record<SourceConfig["kind"], Fetcher>> = {
   rss: new RssFetcher(),
   ics: new IcsFetcher(),
+  linkedin_company: new LinkedInCompanyFetcher(),
 };
 
 /** Returns undefined for source kinds whose fetcher is not built yet. */
