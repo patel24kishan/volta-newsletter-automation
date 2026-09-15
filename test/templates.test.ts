@@ -1,0 +1,83 @@
+import { describe, expect, it } from "vitest";
+import { buildDrafts, whenLine } from "../src/draft/templates.js";
+import { sampleItem } from "./helpers.js";
+
+const TZ = "America/Halifax";
+const yoga = sampleItem({
+  type: "event", source: "volta-calendar", link: "https://www.eventbrite.ca/e/yoga-1", title: "Yoga", date: "2026-09-24T15:00:00Z",
+  summary: "Join us for a 1-hour guided yoga session with Jaimee Lee-Baggley.", location: "Volta, Halifax",
+  raw_excerpt: "Yoga Location: Volta, Halifax. Join us for a 1-hour guided yoga session with Jaimee Lee-Baggley.",
+  related: [{ source: "volta-linkedin", link: "https://www.linkedin.com/posts/voltaeffect_yoga-activity-1-a", title: "Will we see you next Thursday?" }],
+});
+const mixer = sampleItem({ type: "event", source: "volta-calendar", link: "https://www.eventbrite.ca/e/mixer", title: "AI Showcase and Mixer", date: "2026-09-16T21:00:00Z", summary: "Join us for an evening of showcasing AI applications.", raw_excerpt: "AI Showcase and Mixer Join us for an evening of showcasing AI applications." });
+const post = sampleItem({ type: "linkedin", source: "volta-linkedin", link: "https://www.linkedin.com/posts/voltaeffect_chair-activity-2-b", title: "Pull up a chair and stay awhile.", date: "2026-09-15T11:00:00Z", summary: "Pull up a chair and stay awhile. Coffee, Community & Co-Work at Volta is back on Thursday, October 1.", raw_excerpt: "Pull up a chair and stay awhile. Coffee, Community & Co-Work at Volta is back on Thursday, October 1 from 9:00am - 5:00pm." });
+const news = sampleItem({ type: "news", source: "google-news", link: "https://news.google.com/rss/articles/abc", title: "Volta Launches New AI-Focused Program - Entrevestor", date: "2026-09-14T06:57:48Z", summary: "", needs_summary: true, raw_excerpt: "Volta Launches New AI-Focused Program - Entrevestor (Entrevestor)" });
+
+describe("whenLine", () => {
+  it("formats in Halifax time with full weekday and month names", () => {
+    expect(whenLine(yoga, TZ)).toBe("Thursday, September 24, 12:00 pm");
+    expect(whenLine(mixer, TZ)).toBe("Wednesday, September 16, 6:00 pm");
+  });
+});
+
+describe("buildDrafts", () => {
+  const drafts = buildDrafts([mixer, yoga, post, news], { timeZone: TZ });
+
+  it("produces three named drafts that all pass the verifier", () => {
+    expect(drafts.map((d) => d.id)).toEqual(["brief", "standard", "events-first"]);
+    for (const d of drafts) {
+      expect(d.verification.violations, d.id).toEqual([]);
+      expect(d.item_ids).toHaveLength(4);
+      expect(d.subject).toBe("Volta this week: AI Showcase and Mixer");
+    }
+  });
+
+  it("every item link and every related link appears in every draft, markdown and html", () => {
+    const links = [mixer.link, yoga.link, post.link, news.link, yoga.related![0]!.link];
+    for (const d of drafts) for (const l of links) {
+      expect(d.markdown, `${d.id} md ${l}`).toContain(l);
+      expect(d.html, `${d.id} html ${l}`).toContain(`href="${l}"`);
+    }
+  });
+
+  it("standard draft carries when, where and summaries; brief carries only titles and links", () => {
+    const std = drafts[1]!;
+    expect(std.markdown).toContain("When: Thursday, September 24, 12:00 pm");
+    expect(std.markdown).toContain("Where: Volta, Halifax");
+    expect(std.markdown).toContain("Join us for a 1-hour guided yoga session");
+    expect(std.markdown).toContain("[Also covered: Will we see you next Thursday?](https://www.linkedin.com/posts/voltaeffect_yoga-activity-1-a)");
+    const brief = drafts[0]!;
+    expect(brief.markdown).not.toContain("Join us for a 1-hour");
+    expect(brief.markdown).toContain("**Yoga**");
+  });
+
+  it("events-first puts events before everything else", () => {
+    const md = drafts[2]!.markdown;
+    expect(md.indexOf("Yoga")).toBeLessThan(md.indexOf("Pull up a chair"));
+    expect(md.indexOf("## Upcoming events")).toBeLessThan(md.indexOf("## In the news"));
+  });
+
+  it("says so when a section is empty instead of dropping it", () => {
+    const d = buildDrafts([post], { timeZone: TZ })[1]!;
+    expect(d.markdown).toContain("No upcoming events items this week.");
+    expect(d.markdown).toContain("No in the news items this week.");
+    expect(d.verification.ok).toBe(true);
+  });
+
+  it("escapes html and includes the footer when given", () => {
+    const evil = sampleItem({ title: 'Tom & Jerry <script>alert("x")</script>', raw_excerpt: 'Tom & Jerry <script>alert("x")</script> body.' });
+    const d = buildDrafts([evil], { timeZone: TZ, footer: "Drafted automatically from public sources and reviewed by Bader." })[1]!;
+    expect(d.html).toContain("Tom &amp; Jerry &lt;script&gt;");
+    expect(d.html).not.toContain("<script>");
+    expect(d.html).toContain('<html lang="en">');
+    expect(d.markdown.trim().endsWith("reviewed by Bader.")).toBe(true);
+    expect(d.verification.ok).toBe(true);
+  });
+
+  it("a draft with no items still renders and verifies", () => {
+    const ds = buildDrafts([], { timeZone: TZ });
+    expect(ds).toHaveLength(3);
+    for (const d of ds) expect(d.verification.ok).toBe(true);
+    expect(ds[0]!.subject).toBe("Volta this week");
+  });
+});

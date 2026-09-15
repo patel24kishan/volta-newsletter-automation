@@ -62,32 +62,30 @@ export function verifyDraft(draft: string, items: Item[], opts: VerifyOptions): 
     const h12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
     allowedTimes.add(`${h12}:${String(p.minute).padStart(2, "0")}${p.hour < 12 ? "am" : "pm"}`);
   }
+  // Dates and times written in the items' own text are evidence too (a post saying "October 1").
+  const rawText = items.map((it) => `${it.title} ${it.summary} ${it.raw_excerpt}`).join(" \n ");
+  for (const m of rawText.matchAll(dateRe())) allowedDates.add(dateKey(m));
+  for (const m of rawText.matchAll(TIME_RE)) allowedTimes.add(timeKey(m));
+
   const dateSpans: Array<[number, number]> = [];
-  const monthAlt = MONTHS.map((m) => `${m.slice(0, 3)}[a-z]*\\.?`).join("|");
-  const dateRe = new RegExp(`\\b(${monthAlt})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*(\\d{4}))?\\b|\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthAlt})(?:,?\\s*(\\d{4}))?\\b|\\b(\\d{4})-(\\d{2})-(\\d{2})\\b`, "gi");
-  for (const m of draft.matchAll(dateRe)) {
+  for (const m of draft.matchAll(dateRe())) {
     checked.dates++;
     dateSpans.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
-    let month: number, day: number, year: string | undefined;
-    if (m[1]) { month = monthIndex(m[1]); day = Number(m[2]); year = m[3]; }
-    else if (m[5]) { month = monthIndex(m[5]); day = Number(m[4]); year = m[6]; }
-    else { month = Number(m[8]); day = Number(m[9]); year = m[7]; }
-    const key = year ? `${year}-${month}-${day}` : `${month}-${day}`;
-    if (!allowedDates.has(key)) violations.push({ kind: "date", value: m[0], context: around(draft, m.index ?? 0) });
+    if (!allowedDates.has(dateKey(m))) violations.push({ kind: "date", value: m[0], context: around(draft, m.index ?? 0) });
   }
-  for (const m of draft.matchAll(/\b(\d{1,2}):(\d{2})\s?(am|pm|a\.m\.|p\.m\.)\b/gi)) {
+  for (const m of draft.matchAll(TIME_RE)) {
     checked.times++;
-    const key = `${Number(m[1])}:${m[2]}${(m[3] ?? "").replace(/\./g, "").toLowerCase()}`;
-    if (!allowedTimes.has(key)) violations.push({ kind: "time", value: m[0], context: around(draft, m.index ?? 0) });
+    if (!allowedTimes.has(timeKey(m))) violations.push({ kind: "time", value: m[0], context: around(draft, m.index ?? 0) });
   }
 
   // 3. Entities. URLs and tags are blanked with same-length spaces so offsets still line up with dateSpans.
   const blank = (m: string) => " ".repeat(m.length);
   const text = draft.replace(/https?:\/\/[^\s)<>"'\]]+/g, blank).replace(/<[^>]+>/g, blank);
-  const allowNorm = new Set([...allow].map(norm));
+  // An entity is fine if it is part of any allowlisted template phrase ("Bader" in the footer line).
+  const allowText = norm([...allow].join(" \n "));
   for (const phrase of extractEntities(text, dateSpans)) {
     const n = norm(phrase.value);
-    if (allowNorm.has(n) || MONTHS.includes(n) || WEEKDAYS.includes(n)) continue;
+    if (allowText.includes(n) || MONTHS.includes(n) || WEEKDAYS.includes(n)) continue;
     checked.entities++;
     if (!corpus.includes(n)) violations.push({ kind: "entity", value: phrase.value, context: around(draft, phrase.index) });
   }
@@ -127,7 +125,9 @@ export function extractEntities(text: string, skipSpans: Array<[number, number]>
   while (k < tokens.length) {
     const tok = tokens[k]!;
     if (/^[.!?\n]+$/.test(tok.t)) { sentenceStart = true; k++; continue; }
-    if (/^[,;:()"“”[\]|]$/.test(tok.t)) { k++; continue; }
+    // An opening bracket or parenthesis starts a label ("[Also covered: ...]"), whose first word is ordinary.
+    if (/^[([]$/.test(tok.t)) { sentenceStart = true; k++; continue; }
+    if (/^[,;:)"“”\]|]$/.test(tok.t)) { k++; continue; }
     if (isCap(tok.t) && !inSpan(tok.i, skipSpans)) {
       let j = k + 1;
       while (j < tokens.length) {
@@ -160,6 +160,25 @@ function isCap(t: string): boolean {
 
 function inSpan(i: number, spans: Array<[number, number]>): boolean {
   return spans.some(([a, b]) => i >= a && i < b);
+}
+
+const MONTH_ALT = MONTHS.map((m) => `${m.slice(0, 3)}[a-z]*\\.?`).join("|");
+/** "September 24", "Sept. 24th, 2026", "24 September", "2026-09-24". Fresh regex each call (global state). */
+function dateRe(): RegExp {
+  return new RegExp(`\\b(${MONTH_ALT})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*(\\d{4}))?\\b|\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_ALT})(?:,?\\s*(\\d{4}))?\\b|\\b(\\d{4})-(\\d{2})-(\\d{2})\\b`, "gi");
+}
+const TIME_RE = /\b(\d{1,2}):(\d{2})\s?(am|pm|a\.m\.|p\.m\.)\b/gi;
+
+function dateKey(m: RegExpMatchArray): string {
+  let month: number, day: number, year: string | undefined;
+  if (m[1]) { month = monthIndex(m[1]); day = Number(m[2]); year = m[3]; }
+  else if (m[5]) { month = monthIndex(m[5]); day = Number(m[4]); year = m[6]; }
+  else { month = Number(m[8]); day = Number(m[9]); year = m[7]; }
+  return year ? `${year}-${month}-${day}` : `${month}-${day}`;
+}
+
+function timeKey(m: RegExpMatchArray): string {
+  return `${Number(m[1])}:${m[2]}${(m[3] ?? "").replace(/\./g, "").toLowerCase()}`;
 }
 
 function monthIndex(s: string): number {
