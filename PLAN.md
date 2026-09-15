@@ -155,6 +155,8 @@ Google Secret Manager (GCP) or Wrangler secrets (Cloudflare). Both inject at dep
 
 Behind an interface: `publishDraft(draft): Promise<{editUrl}>`. Mailchimp implementation first (API on free tier). Beehiiv or "HTML file in Drive" as alternates. Nothing custom for editing.
 
+**Recipients (added after plan review, 2026-09-15).** Subscriber email addresses live only in the email platform's audience list. The pipeline never reads, stores, exports or logs addresses; it creates a campaign draft addressed to an audience by id (`MAILCHIMP_LIST_ID`), and the platform sends. This keeps member data inside Volta's accounts (constraint 9). Open for Volta: who owns the audience list, how it is populated (signup form on voltaeffect.com, import from an existing contact list, or both), and its size, which decides the platform tier. Recorded as part of C9.
+
 ### 5.7 Transcripts
 
 Drive-folder fetcher first (covers Google Meet auto-transcripts and manual uploads). Otter/Fireflies/Zoom fetchers only if that is where they live. Service account with read-only access to one shared folder.
@@ -318,13 +320,14 @@ D1. Skeleton: `package.json`, `tsconfig`, Vitest, ESLint, item schema, `Config` 
 D2. News fetcher: live Google News RSS (URL from config), relevance filter on the watchlist, recorded-snapshot tests, and `check:sources` reporting the live count.
 D3. Events fetcher: live Volta ICS feed, UTC to America/Halifax, 14-day window, snapshot tests, live count in `check:sources`.
 D4. LinkedIn company-page fetcher: live guest GET of Volta's page, post parsing, activity-id dating, login-wall detection with alert, snapshot tests, live count in `check:sources`. **DONE 2026-09-15.** Finding at build time: the page embeds JSON-LD `DiscussionForumPosting` nodes with absolute `datePublished`, permalink and full text, so that is the primary parse and activity-id dating is the fallback. The `/posts/` URL returns HTTP 999 (bot block) with an authwall body; recorded as a fixture for the failure path. Live: 8 posts in the last 7 days.
-Status: D1-D4 done and committed (`14a5c8e`, `19c7985`, `aa56853`, `bdeae68` review fixes, D4). 63 tests.
+Status: D1-D8 done and committed (D5 `e55afa8`, D6 `410f6d6`, D7 `d21cc7e`, D8 `f48d187`). 103 tests. `npm run demo:week` runs the whole cycle live and writes verified drafts. Findings at build time: Thanksgiving is not a Nova Scotia statutory holiday, so it is a config closure override; the verifier compares letters and digits only after two false positives from punctuation. Next: D9 Slack surface (needs the user's free workspace tokens).
 (Back burner, not in this demo: transcript fetcher with public-safe extractor; Slack channel fetcher for member and LinkedIn link submissions.)
 D5. Dedupe (URL normalization plus title similarity, including a LinkedIn post that links the same news story), extractive summarizer, ranking, plus tests.
 D6. No-fabrication verifier: every link, name and date in a draft must appear in the selected items; test with a seeded invented name to confirm it fails.
 D7. Draft templates (Brief, Standard, Events-first) with "no items" lines, HTML and Markdown output, plus tests.
 D8. `firstWorkday()` with `date-holidays` CA-NS and config overrides, `demo:week` runner honouring the clock override, console and file alerts, plus tests including 2026-10-12 (Thanksgiving Monday, so Tuesday 2026-10-13 is the first workday).
 D9. **Slack surface, required (user, 2026-09-15: "the demo has to be workable in Slack, connected").** Slack Bolt in Socket Mode, so no public URL or tunnel is needed on a laptop. The reminder DM carries the candidate list as checkboxes, a "Generate drafts" button, and the three drafts as follow-up messages with an "Approve" button that writes `out/final.html`. Needs the user's free Slack workspace: bot token plus app-level token. Exact click-through steps given at the start of D9.
+   Test plan for D9 (added after plan review): Block Kit message builders are pure functions tested against expected JSON (candidate list, drafts, approve); the action handlers are tested with a fake Slack client that records calls; `assertLive` guards every `chat.postMessage`, tested to refuse in dry-run; one manual live test against the user's workspace, with the transcript pasted into `out/`.
 D10. Local web curation page as the fallback surface for when Slack is unavailable. Optional after D9.
 
 **Time override (user, 2026-09-15: "option to change date and time so I can test it today").** Built in D1 as `src/clock.ts`: `--now=<ISO>` on any command, or `DEMO_NOW` in `.env`. Every stage reads the clock through it: the content and event windows, the first-workday computation, and the reminder time. Example: `npm run demo:week -- --now=2026-10-13T08:30:00-03:00` behaves as the Tuesday after Thanksgiving.
