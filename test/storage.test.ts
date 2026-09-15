@@ -34,6 +34,15 @@ describe("SqliteStorage", () => {
     expect(got.map((i) => i.link)).toEqual(["https://x/2", "https://x/1"]);
   });
 
+  it("includes items stored at the exact window boundaries even when bounds omit milliseconds", () => {
+    s.upsertItems([
+      sampleItem({ link: "https://x/lo", date: "2026-09-10T00:00:00.000Z" }),
+      sampleItem({ link: "https://x/hi", date: "2026-09-15T00:00:00.000Z" }),
+    ]);
+    const got = s.listItems("2026-09-10T00:00:00Z", "2026-09-15T00:00:00Z");
+    expect(got.map((i) => i.link).sort()).toEqual(["https://x/hi", "https://x/lo"]);
+  });
+
   it("refuses to store an invalid item and rolls back the whole batch", () => {
     const good = sampleItem({ link: "https://x/good" });
     const bad = sampleItem({ link: "not a url" });

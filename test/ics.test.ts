@@ -46,6 +46,10 @@ describe("ICS primitives", () => {
     expect(parseIcsDate({ name: "DTSTART", params: {}, value: "20260916T210000Z" }, tz)!.toISOString()).toBe("2026-09-16T21:00:00.000Z");
     // 18:00 Halifax in September (ADT, UTC-3) is 21:00Z
     expect(parseIcsDate({ name: "DTSTART", params: { TZID: tz }, value: "20260916T180000" }, tz)!.toISOString()).toBe("2026-09-16T21:00:00.000Z");
+    // a different, known TZID is honoured: 18:00 Toronto (EDT, UTC-4) is 22:00Z
+    expect(parseIcsDate({ name: "DTSTART", params: { TZID: "America/Toronto" }, value: "20260916T180000" }, tz)!.toISOString()).toBe("2026-09-16T22:00:00.000Z");
+    // an unknown TZID falls back to the configured zone
+    expect(parseIcsDate({ name: "DTSTART", params: { TZID: "Mars/Olympus" }, value: "20260916T180000" }, tz)!.toISOString()).toBe("2026-09-16T21:00:00.000Z");
     expect(parseIcsDate({ name: "DTSTART", params: {}, value: "20260916T180000" }, tz)!.toISOString()).toBe("2026-09-16T21:00:00.000Z");
     // all-day: local midnight; in January (AST, UTC-4) that is 04:00Z
     expect(parseIcsDate({ name: "DTSTART", params: { VALUE: "DATE" }, value: "20260115" }, tz)!.toISOString()).toBe("2026-01-15T04:00:00.000Z");
@@ -92,6 +96,22 @@ describe("IcsFetcher on synthetic calendars", () => {
     const oct = resolveClock(["--now=2026-10-25T12:00:00Z"], {});
     const r2 = await fetcher.fetch(source, { config: cfg(), clock: oct, fetchText: async () => body });
     expect(r2.items.map((i) => i.title)).toEqual(["Far"]);
+  });
+
+  it("keeps an event that started earlier but has not ended (in progress or multi-day)", async () => {
+    const body = cal(
+      ev({ uid: "m", summary: "Two-day summit", start: "20260914T120000Z", end: "20260916T200000Z", url: "https://x.test/m" }) + CRLF +
+      ev({ uid: "o", summary: "Over", start: "20260915T080000Z", end: "20260915T090000Z", url: "https://x.test/o" }),
+    );
+    const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
+    expect(r.items.map((i) => i.title)).toEqual(["Two-day summit"]);
+  });
+
+  it("warns when a TZID is unknown to Intl", async () => {
+    const body = cal(["BEGIN:VEVENT", "UID:z", "SUMMARY:Odd zone", "DTSTART;TZID=Mars/Olympus:20260920T180000", "URL:https://x.test/z", "END:VEVENT"].join(CRLF));
+    const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
+    expect(r.items).toHaveLength(1);
+    expect(r.warnings.join()).toMatch(/unknown TZID "Mars\/Olympus"/);
   });
 
   it("drops cancelled events", async () => {

@@ -40,11 +40,17 @@ Reminders and sends key off the Nova Scotia statutory holiday table (`date-holid
 ## 7. Commands
 
 ```
-npm install          # install
-npm test             # Vitest, all suites
-npm run typecheck    # tsc --noEmit
-npm run dryrun       # full weekly cycle in dry-run mode
-npm run gate         # what the feature-gate hook runs
+npm install                 # install
+npm test                    # Vitest, all suites
+npm run typecheck           # tsc --noEmit
+npm run lint                # eslint src test
+npm run gate                # typecheck + tests; what the feature-gate hook runs
+npm run check:sources       # live pre-flight: every source, counts, failures (exit 1 on any)
+npm run fixtures:record     # snapshot live sources into test/fixtures
+npm run demo:week           # full weekly cycle in dry-run mode (D8 onward)
+npm run demo                # local curation page (D10, optional)
 ```
+
+Any command accepts `-- --now=<ISO>` to run as if it were that date and time.
 
 Node 22 or newer. TypeScript throughout.

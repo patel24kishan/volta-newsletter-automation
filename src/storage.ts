@@ -80,9 +80,13 @@ export class SqliteStorage implements Storage {
   }
 
   listItems(fromIso: string, toIso: string): Item[] {
+    // Normalize bounds to the same canonical form as stored dates (toISOString, with ms) so the
+    // lexical comparison is exact at the boundaries.
+    const from = new Date(fromIso).toISOString();
+    const to = new Date(toIso).toISOString();
     const rows = this.db
       .prepare("SELECT * FROM items WHERE date >= ? AND date <= ? ORDER BY date DESC")
-      .all(fromIso, toIso) as Record<string, unknown>[];
+      .all(from, to) as Record<string, unknown>[];
     return rows.map(rowToItem);
   }
 

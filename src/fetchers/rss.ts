@@ -8,7 +8,7 @@ import { XMLParser } from "fast-xml-parser";
 import type { SourceConfig } from "../config.js";
 import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
-import { collapseWhitespace, decodeEntities, mentionsAny, stripHtml } from "../text.js";
+import { collapseWhitespace, decodeEntities, firstSentences, mentionsAny, stripHtml } from "../text.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 interface RawRssItem {
@@ -70,7 +70,8 @@ export class RssFetcher implements Fetcher {
         continue;
       }
 
-      const summary = description && description.length > title.length + 20 && !description.startsWith(title) ? description : "";
+      const saysMore = description.length > title.length + 20 && !description.startsWith(title);
+      const summary = saysMore ? firstSentences(description, 2, 280) : "";
       items.push({
         id: itemId(source.id, link),
         source: source.id,

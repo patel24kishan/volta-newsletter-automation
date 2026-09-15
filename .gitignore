@@ -9,3 +9,4 @@ out/
 service-account*.json
 .DS_Store
 Thumbs.db
+out/.turn-base

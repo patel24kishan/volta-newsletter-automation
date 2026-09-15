@@ -43,6 +43,10 @@ export class IcsFetcher implements Fetcher {
       const title = ev.SUMMARY?.value ?? "";
       const uid = ev.UID?.value ?? "";
       const start = ev.DTSTART ? parseIcsDate(ev.DTSTART, tz) : undefined;
+      const end = (ev.DTEND ? parseIcsDate(ev.DTEND, tz) : undefined) ?? start;
+      for (const p of [ev.DTSTART, ev.DTEND]) {
+        if (p?.params.TZID && !isKnownTimeZone(p.params.TZID)) warnings.push(`unknown TZID "${p.params.TZID}" on "${title}", interpreted as ${tz}`);
+      }
       if (!title || !uid) {
         warnings.push(`skipped event without SUMMARY or UID`);
         continue;
@@ -55,7 +59,8 @@ export class IcsFetcher implements Fetcher {
         cancelled++;
         continue;
       }
-      if (start < now || start > until) {
+      // Upcoming or still in progress: ends after now and starts before the window closes.
+      if ((end as Date) < now || start > until) {
         outside++;
         continue;
       }
@@ -172,10 +177,11 @@ function unescapeText(s: string): string {
 
 /**
  * DTSTART forms: 20260916T210000Z (UTC), 20260916T180000 with TZID or floating, 20260916 (all-day).
- * Floating and TZID values are interpreted in the configured timezone; a TZID that differs from it
- * is still interpreted in the configured zone (the demo feed is pure UTC, so this path is rare).
+ * A TZID is honoured when Intl knows it; floating values and unknown TZIDs use the configured zone.
  */
-export function parseIcsDate(prop: IcsProperty, timeZone: string): Date | undefined {
+export function parseIcsDate(prop: IcsProperty, defaultTimeZone: string): Date | undefined {
+  const tzid = prop.params.TZID;
+  const timeZone = tzid && isKnownTimeZone(tzid) ? tzid : defaultTimeZone;
   const v = prop.value.trim();
   const isDate = prop.params.VALUE === "DATE" || /^\d{8}$/.test(v);
   const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/.exec(v);
@@ -193,6 +199,15 @@ export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: numb
   const candidate = guess - offset1;
   const offset2 = offsetMs(new Date(candidate), timeZone);
   return new Date(guess - offset2);
+}
+
+export function isKnownTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function offsetMs(d: Date, timeZone: string): number {

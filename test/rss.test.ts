@@ -51,6 +51,14 @@ describe("RssFetcher on synthetic feeds", () => {
     expect(it.raw_excerpt).toMatch(/Entrevestor/);
   });
 
+  it("caps the summary at two sentences even when the description carries a whole article", async () => {
+    const article = "Volta announced a new founder cohort. It starts in October. " + "More detail follows here. ".repeat(40);
+    const body = feed(rssItem({ title: "Volta opens cohort", link: "https://a.test/1", date: "Mon, 14 Sep 2026 10:00:00 GMT", desc: article }));
+    const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
+    expect(r.items[0]!.summary).toBe("Volta announced a new founder cohort. It starts in October.");
+    expect(r.items[0]!.raw_excerpt.length).toBeGreaterThan(500);
+  });
+
   it("drops items outside the content window and reports the count", async () => {
     const body = feed(
       rssItem({ title: "Volta old", link: "https://a.test/old", date: "Tue, 01 Sep 2026 10:00:00 GMT" }) +
