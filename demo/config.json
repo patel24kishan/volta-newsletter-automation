@@ -5,7 +5,7 @@
   "content_window_days": 7,
   "events_window_days": 14,
   "watchlist": ["Volta", "voltaeffect"],
-  "holiday_overrides": [],
+  "holiday_overrides": ["2026-10-12", "2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31"],
   "alert_recipients": ["bader", "maintainer"],
   "sources": [
     {

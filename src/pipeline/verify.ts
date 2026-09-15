@@ -102,9 +102,9 @@ export function buildCorpus(items: Item[]): string {
   return norm(parts.join(" \n "));
 }
 
-/** Case, apostrophes, dashes and whitespace are not evidence of fabrication; compare without them. */
+/** Case, punctuation and whitespace are not evidence of fabrication; compare letters and digits only. */
 export function norm(s: string): string {
-  return s.toLowerCase().replace(/[’']/g, "").replace(/[\s–—-]+/g, " ").trim();
+  return s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 interface Phrase { value: string; index: number }

@@ -28,6 +28,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "date-holidays": "^3.36.1",
     "fast-xml-parser": "^5.11.1"
   }
 }
