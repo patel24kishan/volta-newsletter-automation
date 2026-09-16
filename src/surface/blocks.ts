@@ -53,9 +53,14 @@ export function reminderBlocks(input: ReminderInput): Block[] {
   }
 
   blocks.push({ type: "divider" });
+  // Numbered list with links (sections allow 3000 chars); checkbox labels must stay under 151 chars,
+  // so they carry only the number and a short title. Every item keeps its link here (constraint 5).
+  const lines = candidates.map((c, n) => linkLine(c, n + 1, timeZone));
+  for (const chunk of chunkMrkdwn(lines.join("\n"), 2900)) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
+
   for (let i = 0; i < candidates.length; i += CHECKBOX_LIMIT) {
     const slice = candidates.slice(i, i + CHECKBOX_LIMIT);
-    const options = slice.map((c) => option(c, timeZone));
+    const options = slice.map((c, k) => option(c, i + k + 1));
     const initial = options.filter((o) => pre.has(o.value));
     const element: Block = { type: "checkboxes", action_id: ACTION.select, options };
     if (initial.length) element.initial_options = initial;
@@ -74,16 +79,23 @@ export function reminderBlocks(input: ReminderInput): Block[] {
   return blocks;
 }
 
-function option(c: RankedItem, timeZone: string): { text: { type: "mrkdwn"; text: string }; description?: { type: "plain_text"; text: string }; value: string } {
+/** One line per candidate: "1. <link|Title> · event · Thursday 9/24 · +1 related". */
+function linkLine(c: RankedItem, n: number, timeZone: string): string {
   const it = c.item;
   const p = partsInZone(new Date(it.date), timeZone);
   const when = it.type === "event" ? `${cap(p.weekday)} ${p.month}/${p.day}` : `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
-  const label = `<${it.link}|${escapeMrkdwn(trim(it.title, 60))}>`;
   const bits = [`${it.type} · ${when}`];
   if (it.related?.length) bits.push(`+${it.related.length} related`);
   if (it.needs_summary) bits.push("needs summary");
-  const description = trim(`${bits.join(" · ")}${it.summary ? ` · ${it.summary}` : ""}`, 75);
-  return { text: { type: "mrkdwn", text: label }, description: { type: "plain_text", text: description }, value: it.id };
+  return `${n}. <${it.link}|${escapeMrkdwn(trim(it.title, 80))}> · ${bits.join(" · ")}`;
+}
+
+/** Checkbox option: text under 151 chars, description under 76 (Slack limits). */
+function option(c: RankedItem, n: number): { text: { type: "plain_text"; text: string }; description?: { type: "plain_text"; text: string }; value: string } {
+  const it = c.item;
+  const text = trim(`${n}. ${it.title}`, 140);
+  const description = trim(it.summary || `${it.type} · no summary yet`, 75);
+  return { text: { type: "plain_text", text }, description: { type: "plain_text", text: description }, value: it.id };
 }
 
 export function draftBlocks(d: Draft, index: number, total: number): Block[] {

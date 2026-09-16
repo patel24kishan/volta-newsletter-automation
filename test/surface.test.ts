@@ -71,11 +71,23 @@ describe("reminderBlocks", () => {
     expect(text).toContain("google-news: empty");
   });
 
-  it("every option links its item and labels type and date; empty candidate list says so", () => {
-    const first = (blocks.find((b) => b.block_id === "select_0") as { accessory: { options: Array<{ text: { text: string }; description: { text: string }; value: string }> } }).accessory.options[0]!;
-    expect(first.text.text).toMatch(/^<https:\/\/[^|]+\|.+>$/);
-    expect(first.description.text).toMatch(/^(event|news|linkedin) · /);
-    expect(first.value).toBe(candidates[0]!.item.id);
+  it("lists every item with its link, keeps checkbox labels within Slack's limits, and maps values to item ids", () => {
+    const text = JSON.stringify(blocks);
+    for (const c of candidates) expect(text).toContain(`<${c.item.link}|`);
+    const groups = blocks.filter((b) => typeof b.block_id === "string" && (b.block_id as string).startsWith("select_")) as Array<{ accessory: { options: Array<{ text: { text: string }; description: { text: string }; value: string }> } }>;
+    const opts = groups.flatMap((g) => g.accessory.options);
+    expect(opts).toHaveLength(12);
+    for (const o of opts) {
+      expect(o.text.text.length).toBeLessThan(151);
+      expect(o.description.text.length).toBeLessThanOrEqual(75);
+    }
+    expect(opts[0]!.text.text).toMatch(/^1\. /);
+    expect(opts[0]!.value).toBe(candidates[0]!.item.id);
+    // a long LinkedIn-style link and a long title never push a label over the limit
+    const long = rankItems([sampleItem({ type: "linkedin", link: "https://www.linkedin.com/posts/voltaeffect_" + "x".repeat(120) + "-activity-7505656961221419008-qsNs", title: "T".repeat(300), raw_excerpt: "T".repeat(300) })], now);
+    const lb = reminderBlocks({ candidates: long, preselectedIds: [], firstWorkday: fw, timeZone: TZ, clockLabel: "real clock", sourceNotes: [] });
+    const lo = (lb.find((b) => b.block_id === "select_0") as { accessory: { options: Array<{ text: { text: string } }> } }).accessory.options[0]!;
+    expect(lo.text.text.length).toBeLessThan(151);
     const empty = reminderBlocks({ candidates: [], preselectedIds: [], firstWorkday: fw, timeZone: TZ, clockLabel: "real clock", sourceNotes: [] });
     expect(JSON.stringify(empty)).toContain("No items were found");
   });
