@@ -10,7 +10,8 @@ import { buildDrafts, type Draft } from "../draft/templates.js";
 import type { RankedItem } from "../pipeline/rank.js";
 import { assertLive } from "../runtime.js";
 import type { Item } from "../schema.js";
-import { approvedBlocks, draftBlocks, reminderBlocks, type ReminderInput } from "./blocks.js";
+import type { Publisher } from "../publish/types.js";
+import { approvedBlocks, draftBlocks, reminderBlocks, sentBlocks, type ReminderInput } from "./blocks.js";
 
 export interface SlackClient {
   postMessage(args: { channel: string; text: string; blocks?: unknown[]; thread_ts?: string }): Promise<{ ts?: string; channel?: string }>;
@@ -26,6 +27,12 @@ export interface SurfaceState {
   /** Last selection per channel, updated on every checkbox change as a fallback to state.values. */
   selections: Map<string, string[]>;
   env: NodeJS.ProcessEnv;
+  /** Email platform handoff. Undefined means the demo stops at the approved file. */
+  publisher?: Publisher;
+  /** Audience details from publisher.verify(), for the confirmation message. */
+  audience?: { audienceName: string; memberCount: number };
+  /** Campaign ids created this session, so Send only acts on what Approve created. */
+  campaigns: Set<string>;
 }
 
 export async function sendReminder(client: SlackClient, userId: string, input: ReminderInput, st: SurfaceState): Promise<{ channel: string; ts?: string }> {
@@ -74,6 +81,34 @@ export async function approveDraft(client: SlackClient, channel: string, draftId
   const paths = { html: join(st.outDir, "final.html"), md: join(st.outDir, "final.md") };
   writeFileSync(paths.html, d.html, "utf8");
   writeFileSync(paths.md, d.markdown, "utf8");
-  await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths), ...(threadTs ? { thread_ts: threadTs } : {}) });
+
+  if (!st.publisher) {
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    return paths;
+  }
+  try {
+    const c = await st.publisher.publishDraft(d);
+    st.campaigns.add(c.id);
+    const audience = st.audience ?? { audienceName: "audience", memberCount: 0 };
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }), ...(threadTs ? { thread_ts: threadTs } : {}) });
+  } catch (e) {
+    await client.postMessage({ channel, text: `Approved and saved to ${paths.html}, but creating the ${st.publisher.platform} campaign failed: ${(e as Error).message}`, ...(threadTs ? { thread_ts: threadTs } : {}) });
+    throw e;
+  }
   return paths;
+}
+
+export async function sendCampaign(client: SlackClient, channel: string, campaignId: string, st: SurfaceState, threadTs?: string): Promise<boolean> {
+  assertLive("send the email campaign", st.env);
+  if (!st.publisher) {
+    await client.postMessage({ channel, text: "No email platform is configured.", ...(threadTs ? { thread_ts: threadTs } : {}) });
+    return false;
+  }
+  if (!st.campaigns.has(campaignId)) {
+    await client.postMessage({ channel, text: "That campaign was not created in this session, so it will not be sent from here. Open it in the email platform instead.", ...(threadTs ? { thread_ts: threadTs } : {}) });
+    return false;
+  }
+  await st.publisher.send(campaignId);
+  await client.postMessage({ channel, text: `Sent via ${st.publisher.platform}.`, blocks: sentBlocks(st.publisher.platform, campaignId), ...(threadTs ? { thread_ts: threadTs } : {}) });
+  return true;
 }

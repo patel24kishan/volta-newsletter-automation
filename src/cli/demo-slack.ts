@@ -10,6 +10,7 @@ import { loadDotEnv } from "./env.js";
 import { ConsoleFileAlerter } from "../alerts.js";
 import { resolveClock } from "../clock.js";
 import { loadConfig } from "../config.js";
+import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
 import { SqliteStorage } from "../storage.js";
 import { sendReminder, type SurfaceState } from "../surface/handlers.js";
@@ -30,7 +31,16 @@ const run = await runWeek({ config, clock, storage, alerter, outDir });
 storage.close();
 console.log(`fetched=${run.fetched} candidates=${run.candidates.length} drafts verified=${run.drafts.filter((d) => d.verified).length}/${run.drafts.length}`);
 
-const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env };
+const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set() };
+const publisher = mailchimpFromEnv(process.env);
+if (publisher) {
+  // Fail loud before anyone presses Approve: bad key or audience id stops the demo here.
+  st.audience = await publisher.verify();
+  st.publisher = publisher;
+  console.log(`email: ${publisher.platform} connected, audience "${st.audience.audienceName}" (${st.audience.memberCount} contacts)`);
+} else {
+  console.log("email: not configured (MAILCHIMP_API_KEY / MAILCHIMP_LIST_ID unset); Approve stops at out/final.html");
+}
 const { app, client } = createSlackApp(process.env, st, alerter);
 await app.start();
 console.log("connected to Slack (Socket Mode)");

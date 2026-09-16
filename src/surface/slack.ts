@@ -5,7 +5,7 @@
 import { App, LogLevel } from "@slack/bolt";
 import type { Alerter } from "../alerts.js";
 import { ACTION, selectedIdsFromState } from "./blocks.js";
-import { approveDraft, generateDrafts, rememberSelection, type SlackClient, type SurfaceState } from "./handlers.js";
+import { approveDraft, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
 
 export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter: Alerter): { app: App; client: SlackClient } {
   const botToken = env.SLACK_BOT_TOKEN;
@@ -72,6 +72,22 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     } catch (e) {
       alerter.alert("error", "slack", `approve failed: ${(e as Error).message}`, "check the logs");
       await client.postMessage({ channel, text: `Could not approve: ${(e as Error).message}` });
+    }
+  });
+
+  app.action(ACTION.send, async ({ ack, body }) => {
+    await ack();
+    const b = body as { channel?: { id: string }; actions?: Array<{ value?: string }> };
+    const channel = b.channel?.id;
+    const campaignId = b.actions?.[0]?.value;
+    log(`Send pressed: campaign ${campaignId ?? "?"}`);
+    if (!channel || !campaignId) return;
+    try {
+      const ok = await sendCampaign(client, channel, campaignId, st);
+      log(ok ? `campaign ${campaignId} sent` : "send refused");
+    } catch (e) {
+      alerter.alert("error", "email", `send failed: ${(e as Error).message}`, "open the campaign in the email platform and send from there");
+      await client.postMessage({ channel, text: `Could not send: ${(e as Error).message}` });
     }
   });
 

@@ -12,6 +12,7 @@ export const ACTION = {
   select: "newsletter_select",
   generate: "newsletter_generate",
   approve: "newsletter_approve",
+  send: "newsletter_send",
 } as const;
 
 export const BLOCK_PREFIX = { select: "select_" } as const;
@@ -112,10 +113,23 @@ export function draftBlocks(d: Draft, index: number, total: number): Block[] {
   return blocks;
 }
 
-export function approvedBlocks(d: Draft, paths: { html: string; md: string }): Block[] {
-  return [
-    { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.\nNext step in production: this draft becomes the email campaign for you to edit and send.` } },
+export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }): Block[] {
+  const blocks: Block[] = [
+    { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.` } },
   ];
+  if (!campaign) {
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "No email platform is configured, so this stops at the file. In production this step creates the campaign for you to send." }] });
+    return blocks;
+  }
+  blocks.push(
+    { type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\n<${campaign.editUrl}|Open it in ${escapeMrkdwn(campaign.platform)}> to edit, or send it as is:` } },
+    { type: "actions", block_id: `send_${d.id}`, elements: [{ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } }] },
+  );
+  return blocks;
+}
+
+export function sentBlocks(platform: string, campaignId: string): Block[] {
+  return [{ type: "section", text: { type: "mrkdwn", text: `*Sent.* ${escapeMrkdwn(platform)} is delivering campaign \`${campaignId}\` to the audience now. Check your inbox in a minute or two.` } }];
 }
 
 /** Item ids ticked across every select_* block in a block_actions payload's state. */

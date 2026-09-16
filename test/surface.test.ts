@@ -28,7 +28,7 @@ class FakeClient implements SlackClient {
 }
 
 function state(outDir: string, env: NodeJS.ProcessEnv = { ALLOW_LIVE: "1" }): SurfaceState {
-  return { candidates, timeZone: TZ, outDir, drafts: new Map(), selections: new Map(), env };
+  return { candidates, timeZone: TZ, outDir, drafts: new Map(), selections: new Map(), env, campaigns: new Set() };
 }
 
 describe("mrkdwn", () => {
