@@ -16,7 +16,8 @@
     "check:sources": "tsx src/cli/check-sources.ts",
     "demo:week": "tsx src/cli/demo-week.ts",
     "demo": "tsx src/cli/demo-serve.ts",
-    "fixtures:record": "tsx src/cli/record-fixtures.ts"
+    "fixtures:record": "tsx src/cli/record-fixtures.ts",
+    "demo:slack": "tsx src/cli/demo-slack.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
@@ -28,6 +29,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@slack/bolt": "^5.1.0",
     "date-holidays": "^3.36.1",
     "fast-xml-parser": "^5.11.1"
   }

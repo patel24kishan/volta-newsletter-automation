@@ -1,0 +1,26 @@
+{
+  "display_information": {
+    "name": "Volta Newsletter",
+    "description": "Weekly newsletter reminder, item selection and draft approval for Volta.",
+    "background_color": "#1a1a1a"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Volta Newsletter",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": ["chat:write", "im:write", "users:read"]
+    }
+  },
+  "settings": {
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
