@@ -32,10 +32,14 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     },
   };
 
+  const log = (msg: string) => console.log(`${new Date().toISOString()} slack: ${msg}`);
+
   app.action(ACTION.select, async ({ ack, body }) => {
     await ack();
     const b = body as { channel?: { id: string }; state?: unknown };
-    if (b.channel?.id) rememberSelection(st, b.channel.id, selectedIdsFromState(b.state));
+    const ids = selectedIdsFromState(b.state);
+    log(`selection changed: ${ids.length} ticked`);
+    if (b.channel?.id) rememberSelection(st, b.channel.id, ids);
   });
 
   app.action(ACTION.generate, async ({ ack, body }) => {
@@ -45,8 +49,10 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     if (!channel) return;
     const fromState = selectedIdsFromState(b.state);
     const ids = fromState.length ? fromState : st.selections.get(channel) ?? [];
+    log(`Generate drafts pressed: ${ids.length} item(s) selected`);
     try {
-      await generateDrafts(client, channel, ids, st, alerter);
+      const good = await generateDrafts(client, channel, ids, st, alerter);
+      log(`posted ${good.length} verified draft(s)`);
     } catch (e) {
       alerter.alert("error", "slack", `generate failed: ${(e as Error).message}`, "check the logs");
       await client.postMessage({ channel, text: `Could not generate drafts: ${(e as Error).message}` });
@@ -58,9 +64,11 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     const b = body as { channel?: { id: string }; actions?: Array<{ value?: string }> };
     const channel = b.channel?.id;
     const draftId = b.actions?.[0]?.value;
+    log(`Approve pressed: draft ${draftId ?? "?"}`);
     if (!channel || !draftId) return;
     try {
-      await approveDraft(client, channel, draftId, st);
+      const paths = await approveDraft(client, channel, draftId, st);
+      log(paths ? `approved and written: ${paths.html}` : "approve failed: draft not found in this session");
     } catch (e) {
       alerter.alert("error", "slack", `approve failed: ${(e as Error).message}`, "check the logs");
       await client.postMessage({ channel, text: `Could not approve: ${(e as Error).message}` });
