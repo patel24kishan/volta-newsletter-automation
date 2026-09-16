@@ -320,6 +320,25 @@ D1. Skeleton: `package.json`, `tsconfig`, Vitest, ESLint, item schema, `Config` 
 D2. News fetcher: live Google News RSS (URL from config), relevance filter on the watchlist, recorded-snapshot tests, and `check:sources` reporting the live count.
 D3. Events fetcher: live Volta ICS feed, UTC to America/Halifax, 14-day window, snapshot tests, live count in `check:sources`.
 D4. LinkedIn company-page fetcher: live guest GET of Volta's page, post parsing, activity-id dating, login-wall detection with alert, snapshot tests, live count in `check:sources`. **DONE 2026-09-15.** Finding at build time: the page embeds JSON-LD `DiscussionForumPosting` nodes with absolute `datePublished`, permalink and full text, so that is the primary parse and activity-id dating is the fallback. The `/posts/` URL returns HTTP 999 (bot block) with an authwall body; recorded as a fixture for the failure path. Live: 8 posts in the last 7 days.
+**D9 status (2026-09-16): DONE and committed. Gate green: 15 files, 114 tests.** Automated coverage: builders, mrkdwn, selection parsing, handlers with a fake client, dry-run refusal. Remaining: the one manual live test against the user's workspace (steps below), not yet run.
+
+- `slack/manifest.json`: app manifest (Socket Mode, interactivity, bot scopes chat:write, im:write, users:read). One paste at api.slack.com/apps → Create New App → From a manifest.
+- `src/surface/mrkdwn.ts`: Markdown → Slack mrkdwn, chunked under the 3000-char section limit.
+- `src/surface/blocks.ts`: pure Block Kit builders: reminder (header, first-workday line, source notes, checkbox groups of ≤10 with the top-ranked pre-ticked, Generate button), draft messages with Approve button, approved confirmation; `selectedIdsFromState` reads ticks from the payload.
+- `src/surface/handlers.ts`: framework-free `sendReminder`, `generateDrafts`, `approveDraft` taking a minimal client; every send passes `assertLive`, so dry-run refuses.
+- `src/surface/slack.ts`: Bolt Socket Mode wrapper adapting real payloads to the handlers.
+- `src/cli/demo-slack.ts` (`npm run demo:slack`): runs the weekly cycle, DMs the reminder when due or with `--send-now`, stays connected for actions.
+- `test/surface.test.ts`: builders, mrkdwn, selection parsing, handlers with a fake client, dry-run refusal.
+
+User setup for the live test (about ten minutes, all free):
+1. Create a free Slack workspace (slack.com/create) or use one you own.
+2. api.slack.com/apps → Create New App → From a manifest → pick the workspace → paste `slack/manifest.json` → Create.
+3. Basic Information → App-Level Tokens → Generate Token and Scopes → name `socket`, add scope `connections:write` → Generate → copy the `xapp-…` token.
+4. Install App → Install to Workspace → Allow → copy the Bot User OAuth Token `xoxb-…`.
+5. In Slack, click your own name → Profile → ⋯ → Copy member ID (starts with `U`).
+6. Copy `.env.example` to `.env` and set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_BADER_USER_ID`, and `ALLOW_LIVE=1`.
+7. Run `npm run demo:slack -- --send-now` (or `-- --now=2026-10-13T08:30:00-03:00 --send-now` for the Thanksgiving Tuesday). The DM arrives; tick items, press Generate drafts, press Approve; `out/final.html` is written.
+
 Status: D1-D8 done and committed (D5 `e55afa8`, D6 `410f6d6`, D7 `d21cc7e`, D8 `f48d187`). 103 tests. `npm run demo:week` runs the whole cycle live and writes verified drafts. Findings at build time: Thanksgiving is not a Nova Scotia statutory holiday, so it is a config closure override; the verifier compares letters and digits only after two false positives from punctuation. Next: D9 Slack surface (needs the user's free workspace tokens).
 (Back burner, not in this demo: transcript fetcher with public-safe extractor; Slack channel fetcher for member and LinkedIn link submissions.)
 D5. Dedupe (URL normalization plus title similarity, including a LinkedIn post that links the same news story), extractive summarizer, ranking, plus tests.
