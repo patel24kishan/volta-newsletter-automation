@@ -13,6 +13,8 @@ export const ACTION = {
   generate: "newsletter_generate",
   approve: "newsletter_approve",
   send: "newsletter_send",
+  /** Link button: Slack still posts an interaction for it, so it needs an id to acknowledge. */
+  preview: "newsletter_preview",
 } as const;
 
 export const BLOCK_PREFIX = { select: "select_" } as const;
@@ -99,48 +101,41 @@ function option(c: RankedItem, n: number): { text: { type: "plain_text"; text: s
   return { text: { type: "plain_text", text }, description: { type: "plain_text", text: description }, value: it.id };
 }
 
-export function draftBlocks(d: Draft, index: number, total: number): Block[] {
+/** A link button opening the real rendered newsletter in a browser tab. */
+function previewButton(url: string, label = "Preview in browser"): Block {
+  return { type: "button", action_id: ACTION.preview, text: { type: "plain_text", text: label, emoji: false }, url };
+}
+
+export function draftBlocks(d: Draft, index: number, total: number, previewUrl?: string): Block[] {
   const blocks: Block[] = [
     { type: "header", text: { type: "plain_text", text: `Draft ${index + 1} of ${total}: ${d.name}`, emoji: false } },
     { type: "context", elements: [{ type: "mrkdwn", text: `Subject: ${escapeMrkdwn(d.subject)} · ${d.item_ids.length} item(s) · verified: ${d.verification.ok ? "yes" : "NO"}` }] },
   ];
   for (const chunk of chunkMrkdwn(markdownToMrkdwn(d.markdown))) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
-  blocks.push({
-    type: "actions",
-    block_id: `approve_${d.id}`,
-    elements: [{ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: `Approve draft ${index + 1}`, emoji: false }, value: d.id }],
-  });
+  const elements: Block[] = [{ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: `Approve draft ${index + 1}`, emoji: false }, value: d.id }];
+  if (previewUrl) elements.push(previewButton(previewUrl));
+  blocks.push({ type: "actions", block_id: `approve_${d.id}`, elements });
   return blocks;
 }
 
-/**
- * Slack allows at most 50 blocks per message. The approval message spends a few on the
- * confirmation, dividers and the Send button, so the preview is capped well below that: the
- * Send button must never be pushed off the end of a long draft.
- */
-const MAX_PREVIEW_SECTIONS = 40;
-
-export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }): Block[] {
+export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, previewUrl?: string): Block[] {
   const blocks: Block[] = [
     { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.` } },
-    { type: "divider" },
-    { type: "context", elements: [{ type: "mrkdwn", text: "*Preview of what will be sent*" }] },
   ];
-  const chunks = chunkMrkdwn(markdownToMrkdwn(d.markdown));
-  for (const chunk of chunks.slice(0, MAX_PREVIEW_SECTIONS)) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
-  if (chunks.length > MAX_PREVIEW_SECTIONS) {
-    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `Preview truncated after ${MAX_PREVIEW_SECTIONS} sections. The full newsletter is in \`${paths.html}\`${campaign ? ` and in ${escapeMrkdwn(campaign.platform)}` : ""}.` }] });
-  }
-  blocks.push({ type: "divider" });
 
   if (!campaign) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "No email platform is configured, so this stops at the file. In production this step creates the campaign for you to send." }] });
+    if (previewUrl) blocks.push({ type: "actions", block_id: `preview_${d.id}`, elements: [previewButton(previewUrl, "Preview the newsletter")] });
     return blocks;
   }
-  blocks.push(
-    { type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\n<${campaign.editUrl}|Open it in ${escapeMrkdwn(campaign.platform)}> to edit, or send it as is:` } },
-    { type: "actions", block_id: `send_${d.id}`, elements: [{ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } }] },
-  );
+
+  blocks.push({ type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\nRead it first, <${campaign.editUrl}|open it in ${escapeMrkdwn(campaign.platform)}> to edit, or send it as is:` } });
+
+  // Preview first, Send last: the destructive action stays the final thing you reach.
+  const elements: Block[] = [];
+  if (previewUrl) elements.push(previewButton(previewUrl, "Preview the newsletter"));
+  elements.push({ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } });
+  blocks.push({ type: "actions", block_id: `send_${d.id}`, elements });
   return blocks;
 }
 

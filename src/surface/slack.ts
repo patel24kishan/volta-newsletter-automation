@@ -75,6 +75,12 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     }
   });
 
+  // A link button still posts an interaction; acknowledge it so Bolt does not warn.
+  app.action(ACTION.preview, async ({ ack }) => {
+    await ack();
+    log("Preview opened in browser");
+  });
+
   app.action(ACTION.send, async ({ ack, body }) => {
     await ack();
     const b = body as { channel?: { id: string }; actions?: Array<{ value?: string }> };

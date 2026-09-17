@@ -6,7 +6,8 @@ import { buildDrafts } from "../src/draft/templates.js";
 import { MailchimpError, MailchimpPublisher, mailchimpFromEnv } from "../src/publish/mailchimp.js";
 import { DryRunRefusal } from "../src/runtime.js";
 import { ACTION } from "../src/surface/blocks.js";
-import { approveDraft, sendCampaign, type SlackClient, type SurfaceState } from "../src/surface/handlers.js";
+import { approveDraft, generateDrafts, sendCampaign, type SlackClient, type SurfaceState } from "../src/surface/handlers.js";
+import { MemoryAlerter } from "../src/alerts.js";
 import type { Publisher } from "../src/publish/types.js";
 import { sampleItem } from "./helpers.js";
 
@@ -122,37 +123,51 @@ describe("Approve and Send with a publisher", () => {
     expect(c.posts.at(-1)!.text).toMatch(/Sent via FakeMail/);
   });
 
-  it("the approval message previews the approved draft in Slack, above the Send button", async () => {
+  it("Approve offers a browser preview button, with Send still last", async () => {
     const c = new FakeClient();
     const st = state(new FakePublisher());
+    const published: Array<{ id: string; html: string }> = [];
+    st.preview = { put: (id, html) => { published.push({ id, html }); return `http://127.0.0.1:3111/preview/${id}`; } };
+
     await approveDraft(c, "D1", draft.id, st);
+
+    // The approved HTML itself is what gets served, not a markdown approximation.
+    expect(published).toHaveLength(1);
+    expect(published[0]!.id).toBe("final");
+    expect(published[0]!.html).toBe(draft.html);
+
     const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
+    const actions = blocks.at(-1) as { type: string; elements: Array<{ action_id: string; url?: string; style?: string }> };
+    expect(actions.type).toBe("actions");
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.send]);
+    expect(actions.elements[0]!.url).toBe("http://127.0.0.1:3111/preview/final");
+    expect(actions.elements[1]!.style).toBe("danger");
 
-    // The preview carries the draft's own content and its item links.
-    const text = JSON.stringify(blocks);
-    expect(text).toContain("Preview of what will be sent");
-    expect(text).toContain("Yoga");
-    expect(text).toContain("https://e/1");
-
-    // Send stays last, so a long preview can never bury it.
-    const sendIdx = blocks.findIndex((b) => b.type === "actions");
-    const previewIdx = blocks.findIndex((b) => JSON.stringify(b).includes("Preview of what will be sent"));
-    expect(previewIdx).toBeGreaterThan(0);
-    expect(sendIdx).toBe(blocks.length - 1);
-    expect(sendIdx).toBeGreaterThan(previewIdx);
-    expect(blocks.length).toBeLessThanOrEqual(50);
+    // No inline markdown dump: the message stays short and points at the real rendering.
+    expect(blocks.length).toBeLessThan(10);
   });
 
-  it("a very long draft truncates the preview rather than losing the Send button", async () => {
+  it("omits the preview button when no preview server is running", async () => {
     const c = new FakeClient();
-    const st = state(new FakePublisher());
-    const huge = { ...draft, markdown: Array.from({ length: 120 }, (_, i) => `paragraph ${i} ` + "x".repeat(2500)).join("\n\n") };
-    st.drafts.set(draft.id, huge);
-    await approveDraft(c, "D1", draft.id, st);
-    const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
-    expect(blocks.length).toBeLessThanOrEqual(50);
-    expect(JSON.stringify(blocks)).toContain("Preview truncated");
-    expect((blocks.at(-1) as { type: string }).type).toBe("actions");
+    await approveDraft(c, "D1", draft.id, state(new FakePublisher()));
+    const actions = (c.posts.at(-1)!.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string }> };
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.send]);
+  });
+
+  it("each generated draft gets its own preview URL so they can be compared", async () => {
+    const c = new FakeClient();
+    const st: SurfaceState = { ...state(), candidates: [], drafts: new Map() };
+    const ids: string[] = [];
+    st.preview = { put: (id) => { ids.push(id); return `http://127.0.0.1:3111/preview/${id}`; } };
+    st.candidates = [{ item: sampleItem({ type: "event", link: "https://e/1", title: "Yoga", raw_excerpt: "Yoga session." }), score: 1, reasons: [] }];
+
+    await generateDrafts(c, "D1", [st.candidates[0]!.item.id], st, new MemoryAlerter());
+
+    expect(ids).toEqual(["draft-brief", "draft-standard", "draft-events-first"]);
+    const draftMsg = c.posts[1]!.blocks as Array<Record<string, unknown>>;
+    const actions = draftMsg.at(-1) as { elements: Array<{ action_id: string; url?: string }> };
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.approve, ACTION.preview]);
+    expect(actions.elements[1]!.url).toBe("http://127.0.0.1:3111/preview/draft-brief");
   });
 
   it("without a publisher, Approve says so and stops at the file", async () => {
