@@ -40,6 +40,16 @@ describe("SqliteStorage", () => {
     expect(s.getItem(it.id)).toEqual(it);
   });
 
+  it("round-trips insights, editor notes, the hold note and the byline", () => {
+    const it = sampleItem({ requires_review: true, hold_note: "REVISIT w/c Sep 28 (embargo)", byline: "Marc Comeau, co-founder", insights: ["one", "two"], editor_notes: ["Confirm before publishing."] });
+    s.upsertItems([it]);
+    expect(s.getItem(it.id)).toEqual(it);
+    // An item without them comes back without them, not with empty placeholders.
+    const plain = sampleItem({ link: "https://x/plain" });
+    s.upsertItems([plain]);
+    expect(s.getItem(plain.id)).toEqual(plain);
+  });
+
   it("includes items stored at the exact window boundaries even when bounds omit milliseconds", () => {
     s.upsertItems([
       sampleItem({ link: "https://x/lo", date: "2026-09-10T00:00:00.000Z" }),
@@ -54,5 +64,38 @@ describe("SqliteStorage", () => {
     const bad = sampleItem({ link: "not a url" });
     expect(() => s.upsertItems([good, bad])).toThrow(StorageError);
     expect(s.countItems()).toBe(0);
+  });
+});
+
+describe("SqliteStorage migration", () => {
+  it("opens a database created before the newer columns existed, adds them, and keeps the old rows", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { DatabaseSync } = await import("node:sqlite");
+    const dir = mkdtempSync(join(tmpdir(), "volta-migrate-"));
+    const path = join(dir, "old.sqlite");
+    try {
+      // The table exactly as the first version created it: no location, related or extra.
+      const old = new DatabaseSync(path);
+      old.exec(`CREATE TABLE items (id TEXT PRIMARY KEY, source TEXT NOT NULL, type TEXT NOT NULL, date TEXT NOT NULL,
+        title TEXT NOT NULL, summary TEXT NOT NULL, needs_summary INTEGER NOT NULL, link TEXT NOT NULL, source_ref TEXT NOT NULL,
+        confidence TEXT NOT NULL, requires_review INTEGER NOT NULL, raw_excerpt TEXT NOT NULL, fetched_at TEXT NOT NULL)`);
+      old.prepare("INSERT INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").run("old:1", "google-news", "news", "2026-09-01T00:00:00.000Z", "An old item", "s", 0, "https://x/old", "g", "high", 0, "An old item", "2026-09-01T00:00:00.000Z");
+      old.close();
+
+      const s = new SqliteStorage(path);
+      expect(s.getItem("old:1")?.title).toBe("An old item");
+      const fresh = sampleItem({ link: "https://x/new", insights: ["kept"], hold_note: "h", requires_review: true });
+      expect(s.upsertItems([fresh])).toBe(1);
+      expect(s.getItem(fresh.id)).toEqual(fresh);
+      s.close();
+      // Opening it again must not try to add the columns twice.
+      const again = new SqliteStorage(path);
+      expect(again.countItems()).toBe(2);
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

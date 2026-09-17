@@ -96,7 +96,7 @@ export function verifyDraft(draft: string, items: Item[], opts: VerifyOptions): 
 export function buildCorpus(items: Item[]): string {
   const parts: string[] = [];
   for (const it of items) {
-    parts.push(it.title, it.summary, it.raw_excerpt, it.location ?? "");
+    parts.push(it.title, it.summary, it.raw_excerpt, it.location ?? "", it.byline ?? "", ...(it.insights ?? []));
     for (const r of it.related ?? []) parts.push(r.title);
   }
   return norm(parts.join(" \n "));

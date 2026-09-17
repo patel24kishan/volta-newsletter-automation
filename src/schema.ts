@@ -35,7 +35,21 @@ export interface Item {
   location?: string;
   /** Other sources that carried the same story, attached by dedupe. Each keeps its own link. */
   related?: RelatedLink[];
+  /** Reader-facing points taken from the source, shown in a draft under "Key insights". */
+  insights?: string[];
+  /**
+   * Notes the source addressed to the editor ("confirm she has cleared this before we run it").
+   * Shown to the curator next to the drafts. Never rendered into a newsletter.
+   */
+  editor_notes?: string[];
+  /** Why a requires_review item is on hold, as the source put it, e.g. "REVISIT w/c Sep 28 (embargo)". */
+  hold_note?: string;
+  /** Who the item is about, e.g. "Yuki Tanaka, co-founder". */
+  byline?: string;
 }
+
+/** The optional fields stored together as one JSON column. */
+export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline"] as const;
 
 export interface RelatedLink {
   source: string;
@@ -75,6 +89,13 @@ export function validateItem(value: unknown): ValidationResult {
   bool("needs_summary");
   bool("requires_review");
   if ("location" in it && it.location !== undefined && typeof it.location !== "string") errors.push("location must be a string when present");
+  for (const key of ["insights", "editor_notes"] as const) {
+    const v = it[key];
+    if (v !== undefined && (!Array.isArray(v) || !v.every((s) => typeof s === "string"))) errors.push(`${key} must be an array of strings when present`);
+  }
+  for (const key of ["hold_note", "byline"] as const) {
+    if (it[key] !== undefined && typeof it[key] !== "string") errors.push(`${key} must be a string when present`);
+  }
   if ("related" in it && it.related !== undefined) {
     if (!Array.isArray(it.related)) errors.push("related must be an array when present");
     else for (const r of it.related as unknown[]) {

@@ -3,30 +3,42 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MemoryAlerter } from "../src/alerts.js";
-import { runWeek } from "../src/run-week.js";
-import { SqliteStorage } from "../src/storage.js";
 import { resolveClock } from "../src/clock.js";
 import type { Config, SourceConfig } from "../src/config.js";
 import { buildDrafts } from "../src/draft/templates.js";
-import { SlackChannelFetcher, parseFounderUpdate } from "../src/fetchers/slack-channel.js";
+import { SlackChannelFetcher, parseFounderUpdate, splitEditorial } from "../src/fetchers/slack-channel.js";
 import { rankItems } from "../src/pipeline/rank.js";
+import { runWeek } from "../src/run-week.js";
 import { validateItem } from "../src/schema.js";
+import { SqliteStorage } from "../src/storage.js";
 
 // Shapes copied from the real #newsletter-keynotes channel (entities as Slack sends them).
 const NORMAL = [
-  ":studio_microphone: *Lantern Freight · Yuki Tanaka, co-founder · Thu, Sep 17, 2026*",
+  ":studio_microphone: *Northcast · Iris Thibodeau, founder · Fri, Sep 11, 2026*",
   "",
-  "Three hires and a metric they're proud of. 23 min, recorded.",
+  "Open beta of the fisheries weather API. 21 min, recorded.",
   "",
   "*Conversation*",
   "",
-  "*Q (1:45): You said you had a number you actually liked. Which one?*",
-  "&gt; Empty-mile percentage. Trucks on our network run empty eighteen percent of the time.",
+  "*Q (3:00): Why an API and not an app?*",
+  "&gt; Because the app already exists — four of them, and they're all fine.",
   "*Summary*",
-  "• Headline metric: *18% empty miles versus a ~35% industry average.* Yuki volunteered the caveats.",
-  "• Three new hires, all deliberately from outside logistics.",
-  "• *Newsletter angle:* the metric gets people in, the hiring philosophy is what they'll remember. Run both, metric first.",
-  "• Publish the empty-miles figure with his caveat attached, not as a bare number. *Sent using* Claude",
+  "• Open beta of a hyperlocal marine forecast API — 6 km resolution versus Environment Canada's much larger marine zones.",
+  "• Claims improvement on *wind direction only*; explicitly says wave height is no better. Comparison data promised — chase it, and don't publish the claim without it.",
+  "• Public docs, free tier, no card required.",
+  "• *Newsletter angle:* \"one forecast for an area where the wind differs end to end\" is the line that makes the problem legible.",
+  "• Ask Iris for the comparison chart. *Sent using* Claude",
+].join("\n");
+
+const FUNDING = [
+  ":studio_microphone: *Harbourlight Robotics · Nadia Fortin, CEO · Wed, Sep 2, 2026*",
+  "",
+  "Seed round closed. 26 min, recorded.",
+  "",
+  "*Summary*",
+  "• Closed a $1.4M seed, led out of Montréal with two local angels. Nadia explicitly asked that the raise amount not lead.",
+  "• Quotable: _\"'The market is too small' often means 'I don't know this market.'\"_ Confirmed she's happy for this to be used.",
+  "• *Newsletter angle:* run it as the rejection story. *Sent using* Claude",
 ].join("\n");
 
 const EMBARGO = [
@@ -55,24 +67,50 @@ const HELD_NOT_READY = EMBARGO
   .replace("Bellwether Soil · Marc Comeau, co-founder · Tue, Sep 15, 2026", "Kelpwise · Jonah Mercer, founder · Fri, Sep 4, 2026");
 
 describe("parseFounderUpdate", () => {
-  it("reads company, person, date, topic, bullets and the newsletter angle", () => {
+  it("reads company, person, date, topic and the newsletter angle", () => {
     const u = parseFounderUpdate(NORMAL)!;
-    expect(u).toMatchObject({ company: "Lantern Freight", person: "Yuki Tanaka, co-founder", dateText: "Thu, Sep 17, 2026" });
+    expect(u).toMatchObject({ company: "Northcast", person: "Iris Thibodeau, founder", dateText: "Fri, Sep 11, 2026" });
     // The duration note after the first sentence is metadata, not the topic.
-    expect(u.topic).toBe("Three hires and a metric they're proud of.");
+    expect(u.topic).toBe("Open beta of the fisheries weather API.");
     expect(u.hold).toBeUndefined();
-    expect(u.bullets).toHaveLength(4);
-    expect(u.angle).toBe("the metric gets people in, the hiring philosophy is what they'll remember. Run both, metric first.");
-    // Emphasis markers and the tool's sign-off are presentation, not content.
+    expect(u.bullets).toHaveLength(5);
+    expect(u.angle).toMatch(/^"one forecast for an area/);
     expect(u.bullets.join(" ")).not.toMatch(/\*|Sent using/);
   });
 
-  it("recognises a hold, with or without an embargo, and stops bullets at the next section", () => {
+  it("splits what a reader can be told from what was said to the editor, and loses neither", () => {
+    const u = parseFounderUpdate(NORMAL)!;
+    expect(u.insights).toEqual([
+      "Open beta of a hyperlocal marine forecast API — 6 km resolution versus Environment Canada's much larger marine zones.",
+      "Claims improvement on wind direction only; explicitly says wave height is no better.",
+      "Public docs, free tier, no card required.",
+    ]);
+    // The angle, the bullet after it, and the caution lifted out of bullet two.
+    expect(u.notes).toEqual([
+      "Newsletter angle: \"one forecast for an area where the wind differs end to end\" is the line that makes the problem legible.",
+      "Ask Iris for the comparison chart.",
+      "Comparison data promised — chase it, and don't publish the claim without it.",
+    ]);
+    expect(u.insights.join(" ")).not.toMatch(/don't publish|chase it|Newsletter angle/);
+  });
+
+  it("keeps a decimal figure and a quotation whole (regression: \"$1.4M\" once came out as \"4M\")", () => {
+    const u = parseFounderUpdate(FUNDING)!;
+    expect(u.insights[0]).toBe("Closed a $1.4M seed, led out of Montréal with two local angels. Nadia explicitly asked that the raise amount not lead.");
+    expect(u.insights[1]).toBe("\"'The market is too small' often means 'I don't know this market.'\"");
+    expect(u.notes).toContain("Confirmed she's happy for this to be used.");
+  });
+
+  it("recognises a hold, with or without an embargo, and turns its closing sections into notes", () => {
     const e = parseFounderUpdate(EMBARGO)!;
     expect(e.hold).toBe("REVISIT w/c Sep 28 (embargo)");
     expect(e.company).toBe("Bellwether Soil");
     expect(e.bullets).toHaveLength(3); // "Why it's held" is not a bullet
     expect(e.angle).toBeUndefined();
+    expect(e.notes).toEqual([
+      "Why it's held: Embargo, not editorial.",
+      "Revisit at end of month: Confirm the announcement went ahead on Sep 30 before publishing anything.",
+    ]);
     expect(parseFounderUpdate(HELD_NOT_READY)!.hold).toBe("REVISIT w/c Sep 28");
   });
 
@@ -80,6 +118,16 @@ describe("parseFounderUpdate", () => {
     expect(parseFounderUpdate("nice work everyone!")).toBeUndefined();
     expect(parseFounderUpdate("Proud to share <https://cbc.ca/story|CBC story>")).toBeUndefined();
     expect(parseFounderUpdate(":studio_microphone: *Only Two · Parts*")).toBeUndefined();
+  });
+});
+
+describe("splitEditorial", () => {
+  it("never discards a sentence: each one is either kept or moved to the notes", () => {
+    const bullet = "Crossed 100 paying customers. That's the story. Flag this for legal before we run it.";
+    const { keep, editorial } = splitEditorial(bullet);
+    expect(keep).toBe("Crossed 100 paying customers.");
+    expect(editorial).toEqual(["That's the story.", "Flag this for legal before we run it."]);
+    expect(`${keep} ${editorial.join(" ")}`).toBe(bullet);
   });
 });
 
@@ -107,48 +155,51 @@ describe("founder updates through the channel fetcher", () => {
   const fetcher = new SlackChannelFetcher();
   const env = { SLACK_BOT_TOKEN: "xoxb-test" };
 
-  it("a normal update becomes an item titled by company and topic, summarised by its newsletter angle, linked to the message", async () => {
+  it("a clear update: reader-facing title, angle as the choosing line, insights and notes kept apart, linked to the message", async () => {
     const t = ts("2026-09-17T20:00:00Z");
-    const { fn, calls } = slack([{ text: NORMAL.replace(/&gt;/g, "&gt;"), ts: t }]);
+    const { fn, calls } = slack([{ text: NORMAL, ts: t }]);
     const r = await fetcher.fetch(source, { config, clock, slackApi: fn, env });
 
     expect(r.error).toBeUndefined();
-    expect(r.items).toHaveLength(1);
     const item = r.items[0]!;
     expect(validateItem(item)).toEqual({ ok: true, errors: [] });
     expect(item).toMatchObject({
       type: "member_social",
-      title: "Lantern Freight: Three hires and a metric they're proud of.",
-      summary: "the metric gets people in, the hiring philosophy is what they'll remember. Run both, metric first.",
+      title: "Northcast: Open beta of the fisheries weather API.",
+      byline: "Iris Thibodeau, founder",
       needs_summary: false,
       requires_review: false,
       link: `https://ghost24.slack.com/archives/C0C2H7WAUJX/p${t.replace(".", "")}`,
     });
+    expect(item.summary).toMatch(/^"one forecast for an area/);
+    expect(item.insights).toHaveLength(3);
+    expect(item.editor_notes).toHaveLength(3);
+    expect(item.hold_note).toBeUndefined();
     // No submitter lookup is needed: the header already names who the update is about.
     expect(calls).toEqual(["conversations.history", "chat.getPermalink"]);
   });
 
-  it("a held update is shown, not hidden: marked for review first, two bullets as the summary, and flagged for a human", async () => {
+  it("a held update is shown, flagged for a human, and carries why it is held. Its title stays reader-facing", async () => {
     const { fn } = slack([{ text: EMBARGO, ts: ts("2026-09-15T20:00:00Z") }]);
     const item = (await fetcher.fetch(source, { config, clock, slackApi: fn, env })).items[0]!;
 
-    expect(item.title).toBe("MARKED FOR REVIEW: Bellwether Soil: Good material, can't run it yet.");
+    // The review label belongs to Slack. If it were baked into the title it would reach readers.
+    expect(item.title).toBe("Bellwether Soil: Good material, can't run it yet.");
     expect(item.requires_review).toBe(true);
+    expect(item.hold_note).toBe("REVISIT w/c Sep 28 (embargo)");
+    // While choosing, a held item is described by its first two points.
     expect(item.summary).toBe("Federal agri-innovation grant confirmed, embargoed until Sep 30 — announcement is the funder's to make. Non-embargoed material is solid: 11 farms, 2 seasons of data.");
-    expect(item.raw_excerpt).toContain("HOLD — REVISIT w/c Sep 28 (embargo)");
+    expect(item.editor_notes!.join(" ")).toMatch(/Confirm the announcement went ahead on Sep 30/);
     expect(item.link).toMatch(/^https:\/\/ghost24\.slack\.com\/archives\/C0C2H7WAUJX\/p\d+$/);
     expect(validateItem(item).ok).toBe(true);
   });
 
-  it("a held update never seeds the pre-selected drafts ahead of a clear one posted the same day", async () => {
-    const { fn } = slack([
-      { text: EMBARGO, ts: ts("2026-09-17T20:00:00Z") },
-      { text: NORMAL, ts: ts("2026-09-17T19:00:00Z") },
-    ]);
+  it("a held update ranks below a clear one posted the same day", async () => {
+    const { fn } = slack([{ text: EMBARGO, ts: ts("2026-09-17T20:00:00Z") }, { text: NORMAL, ts: ts("2026-09-17T19:00:00Z") }]);
     const items = (await fetcher.fetch(source, { config, clock, slackApi: fn, env })).items;
     const ranked = rankItems(items, clock.now());
-    expect(ranked[0]!.item.title).toMatch(/^Lantern Freight/);
-    expect(ranked[1]!.item.title).toMatch(/^MARKED FOR REVIEW/);
+    expect(ranked[0]!.item.title).toMatch(/^Northcast/);
+    expect(ranked[1]!.item.requires_review).toBe(true);
     expect(ranked[1]!.reasons.join()).toMatch(/requires review -2/);
   });
 
@@ -156,7 +207,7 @@ describe("founder updates through the channel fetcher", () => {
     const { fn } = slack([{ text: NORMAL, ts: ts("2026-09-17T20:00:00Z") }], { permalinkFails: true });
     const r = await fetcher.fetch(source, { config, clock, slackApi: fn, env });
     expect(r.items).toEqual([]);
-    expect(r.warnings.join()).toMatch(/could not get a permalink for the Lantern Freight update/);
+    expect(r.warnings.join()).toMatch(/could not get a permalink for the Northcast update/);
   });
 
   it("handles updates and plain link-shares in the same channel", async () => {
@@ -181,8 +232,8 @@ describe("held updates and the pre-generated drafts", () => {
       const run = await runWeek({ config, clock, storage, alerter: new MemoryAlerter(), outDir, slackApi: fn, env: { SLACK_BOT_TOKEN: "x" } });
 
       expect(run.candidates.map((c) => c.item.title)).toEqual([
-        "Lantern Freight: Three hires and a metric they're proud of.",
-        "MARKED FOR REVIEW: Bellwether Soil: Good material, can't run it yet.",
+        "Northcast: Open beta of the fisheries weather API.",
+        "Bellwether Soil: Good material, can't run it yet.",
       ]);
       const held = run.candidates.find((c) => c.item.requires_review)!;
       expect(run.preselected_ids).not.toContain(held.item.id);
@@ -193,8 +244,11 @@ describe("held updates and the pre-generated drafts", () => {
         const md = readFileSync(d.file_md, "utf8");
         expect(md, d.id).not.toContain("Bellwether");
         expect(md, d.id).not.toContain("embargo");
-        expect(md, d.id).toContain("Lantern Freight");
+        expect(md, d.id).toContain("Northcast");
       }
+      // Insights, notes and the hold note survive storage.
+      expect(storage.getItem(held.item.id)).toMatchObject({ hold_note: "REVISIT w/c Sep 28 (embargo)", byline: "Marc Comeau, co-founder" });
+      expect(storage.getItem(held.item.id)!.insights).toHaveLength(3);
     } finally {
       storage.close();
       rmSync(outDir, { recursive: true, force: true });
@@ -203,19 +257,42 @@ describe("held updates and the pre-generated drafts", () => {
 });
 
 describe("founder updates in the drafts", () => {
-  it("appear under their own heading, not under Volta's LinkedIn, and pass the no-fabrication check", async () => {
-    const { fn } = slack([{ text: NORMAL, ts: ts("2026-09-17T20:00:00Z") }, { text: EMBARGO, ts: ts("2026-09-15T20:00:00Z") }]);
+  it("appear under Key insights as bullets, with nothing meant for the editor and no review label", async () => {
+    const { fn } = slack([{ text: NORMAL, ts: ts("2026-09-17T20:00:00Z") }, { text: EMBARGO, ts: ts("2026-09-15T20:00:00Z") }, { text: FUNDING, ts: ts("2026-09-14T20:00:00Z") }]);
     const items = (await new SlackChannelFetcher().fetch(source, { config, clock, slackApi: fn, env: { SLACK_BOT_TOKEN: "x" } })).items;
     const drafts = buildDrafts(items, { timeZone: config.timezone });
 
-    for (const d of drafts) expect(d.verification.violations, `${d.id}: ${JSON.stringify(d.verification.violations)}`).toEqual([]);
-    const standard = drafts[1]!.markdown;
-    expect(standard).toContain("## From our members");
-    expect(standard).toContain("**Lantern Freight: Three hires and a metric they're proud of.**");
-    expect(standard).toContain("**MARKED FOR REVIEW: Bellwether Soil");
-    expect(standard).toContain("[Read the update](https://ghost24.slack.com/archives/");
-    // Nothing of theirs is filed under Volta's own LinkedIn section.
-    const linkedinSection = standard.split("## From Volta on LinkedIn")[1]!.split("## ")[0]!;
-    expect(linkedinSection).toContain("No from volta on linkedin items this week.");
+    for (const d of drafts) {
+      expect(d.verification.violations, `${d.id}: ${JSON.stringify(d.verification.violations)}`).toEqual([]);
+      // What readers must never see: the curator's label, the editor's angle, cautions, hold reasons.
+      for (const leak of ["MARKED FOR REVIEW", "Newsletter angle", "don't publish", "chase it", "Why it's held", "REVISIT", "Confirmed she's happy", "Ask Iris"]) {
+        expect(d.markdown, `${d.id} leaks "${leak}"`).not.toContain(leak);
+        expect(d.html, `${d.id} html leaks "${leak}"`).not.toContain(leak);
+      }
+    }
+
+    const standard = drafts[1]!;
+    expect(standard.markdown).toContain("## Key insights");
+    expect(standard.markdown).toContain("**Northcast: Open beta of the fisheries weather API.**");
+    expect(standard.markdown).toContain("With Iris Thibodeau, founder");
+    expect(standard.markdown).toContain("- Claims improvement on wind direction only; explicitly says wave height is no better.");
+    expect(standard.markdown).toContain("- Closed a $1.4M seed, led out of Montréal with two local angels.");
+    expect(standard.markdown).toContain("[Read the update](https://ghost24.slack.com/archives/");
+    expect(standard.html).toContain("<ul><li>Open beta of a hyperlocal marine forecast API");
+    // A held item that a person chose reads like any other story.
+    expect(standard.markdown).toContain("**Bellwether Soil: Good material, can't run it yet.**");
+
+    // Standard leads with the stories; Events first leads with the calendar. Brief gives one point each.
+    expect(standard.markdown.indexOf("## Key insights")).toBeLessThan(standard.markdown.indexOf("## Upcoming events"));
+    const eventsFirst = drafts[2]!.markdown;
+    expect(eventsFirst.indexOf("## Upcoming events")).toBeLessThan(eventsFirst.indexOf("## Key insights"));
+    const brief = drafts[0]!.markdown;
+    expect(brief).toContain("- Open beta of a hyperlocal marine forecast API");
+    expect(brief).not.toContain("- Public docs, free tier");
+
+    // Nothing of theirs is filed under another source's heading.
+    for (const heading of ["## In the news", "## From Volta on LinkedIn"]) {
+      expect(standard.markdown.split(heading)[1]!.split("## ")[0]!, heading).not.toContain("Northcast");
+    }
   });
 });

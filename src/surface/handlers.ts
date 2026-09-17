@@ -11,7 +11,7 @@ import type { RankedItem } from "../pipeline/rank.js";
 import { assertLive } from "../runtime.js";
 import type { Item } from "../schema.js";
 import type { Publisher } from "../publish/types.js";
-import { approvedBlocks, draftBlocks, reminderBlocks, sentBlocks, type ReminderInput } from "./blocks.js";
+import { approvedBlocks, draftBlocks, draftNotesBlocks, reminderBlocks, sentBlocks, type ReminderInput } from "./blocks.js";
 
 export interface SlackClient {
   postMessage(args: { channel: string; text: string; blocks?: unknown[]; thread_ts?: string }): Promise<{ ts?: string; channel?: string }>;
@@ -63,7 +63,14 @@ export async function generateDrafts(client: SlackClient, channel: string, selec
   }
   st.drafts.clear();
   for (const d of good) st.drafts.set(d.id, d);
-  await client.postMessage({ channel, text: `${good.length} draft(s) from ${selected.length} selected item(s).`, ...(threadTs ? { thread_ts: threadTs } : {}) });
+  // The drafts leave out review labels and notes to the editor, so they are said here instead.
+  const lead = `${good.length} draft(s) from ${selected.length} selected item(s).`;
+  const notes = draftNotesBlocks(selected);
+  await client.postMessage({
+    channel, text: lead,
+    ...(notes.length ? { blocks: [{ type: "section", text: { type: "mrkdwn", text: lead } }, ...notes] } : {}),
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+  });
   for (let i = 0; i < good.length; i++) {
     const d = good[i]!;
     const url = st.preview?.put(`draft-${d.id}`, d.html);
@@ -86,16 +93,19 @@ export async function approveDraft(client: SlackClient, channel: string, draftId
   writeFileSync(paths.md, d.markdown, "utf8");
 
   const previewUrl = st.preview?.put("final", d.html);
+  // Held items that made it into this draft, so the last message before Send names them.
+  const inDraft = new Set(d.item_ids);
+  const held = st.candidates.map((c) => c.item).filter((i) => i.requires_review && inDraft.has(i.id));
 
   if (!st.publisher) {
-    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths, undefined, previewUrl), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths, undefined, previewUrl, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
     return paths;
   }
   try {
     const c = await st.publisher.publishDraft(d);
     st.campaigns.add(c.id);
     const audience = st.audience ?? { audienceName: "audience", memberCount: 0 };
-    await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }, previewUrl), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }, previewUrl, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
   } catch (e) {
     await client.postMessage({ channel, text: `Approved and saved to ${paths.html}, but creating the ${st.publisher.platform} campaign failed: ${(e as Error).message}`, ...(threadTs ? { thread_ts: threadTs } : {}) });
     throw e;

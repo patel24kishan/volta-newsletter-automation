@@ -5,7 +5,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { validateItem, type Item, type RelatedLink } from "./schema.js";
+import { EXTRA_FIELDS, validateItem, type Item, type RelatedLink } from "./schema.js";
 
 export interface Storage {
   /** Insert or replace items by id. Returns the number written. */
@@ -41,23 +41,38 @@ export class SqliteStorage implements Storage {
         raw_excerpt TEXT NOT NULL,
         location TEXT,
         related TEXT,
+        extra TEXT,
         fetched_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS items_date ON items(date);
     `);
+    this.migrate();
+  }
+
+  /**
+   * A database created by an earlier version lacks newer columns, and CREATE TABLE IF NOT EXISTS
+   * leaves it that way. Add what is missing. Every addition is a nullable column, so this is safe
+   * to run on every start and never touches existing rows.
+   */
+  private migrate(): void {
+    const have = new Set((this.db.prepare("PRAGMA table_info(items)").all() as Array<{ name: string }>).map((c) => c.name));
+    for (const [column, type] of [["location", "TEXT"], ["related", "TEXT"], ["extra", "TEXT"]] as const) {
+      if (!have.has(column)) this.db.exec(`ALTER TABLE items ADD COLUMN ${column} ${type}`);
+    }
   }
 
   upsertItems(items: Item[]): number {
     const stmt = this.db.prepare(`
       INSERT INTO items (id, source, type, date, title, summary, needs_summary, link, source_ref,
-                         confidence, requires_review, raw_excerpt, location, related, fetched_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         confidence, requires_review, raw_excerpt, location, related, extra, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         source=excluded.source, type=excluded.type, date=excluded.date, title=excluded.title,
         summary=excluded.summary, needs_summary=excluded.needs_summary, link=excluded.link,
         source_ref=excluded.source_ref, confidence=excluded.confidence,
         requires_review=excluded.requires_review, raw_excerpt=excluded.raw_excerpt,
-        location=excluded.location, related=excluded.related, fetched_at=excluded.fetched_at
+        location=excluded.location, related=excluded.related, extra=excluded.extra,
+        fetched_at=excluded.fetched_at
     `);
     const now = new Date().toISOString();
     let n = 0;
@@ -69,7 +84,7 @@ export class SqliteStorage implements Storage {
         stmt.run(
           it.id, it.source, it.type, it.date, it.title, it.summary, it.needs_summary ? 1 : 0,
           it.link, it.source_ref, it.confidence, it.requires_review ? 1 : 0, it.raw_excerpt, it.location ?? null,
-          it.related && it.related.length ? JSON.stringify(it.related) : null, now,
+          it.related && it.related.length ? JSON.stringify(it.related) : null, packExtra(it), now,
         );
         n++;
       }
@@ -124,5 +139,13 @@ function rowToItem(r: Record<string, unknown>): Item {
   };
   if (typeof r.location === "string") item.location = r.location;
   if (typeof r.related === "string") item.related = JSON.parse(r.related) as RelatedLink[];
+  if (typeof r.extra === "string") Object.assign(item, JSON.parse(r.extra) as Partial<Item>);
   return item;
+}
+
+/** The optional fields travel as one JSON column, so adding another never needs a migration. */
+function packExtra(it: Item): string | null {
+  const extra: Record<string, unknown> = {};
+  for (const key of EXTRA_FIELDS) if (it[key] !== undefined) extra[key] = it[key];
+  return Object.keys(extra).length ? JSON.stringify(extra) : null;
 }

@@ -11,7 +11,7 @@
  */
 import type { SourceConfig } from "../config.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
-import { collapseWhitespace, decodeEntities, firstSentences } from "../text.js";
+import { collapseWhitespace, decodeEntities, firstSentences, splitSentences } from "../text.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 /** Slack wraps links as <https://x> or <https://x|label>. */
@@ -136,6 +136,17 @@ export interface FounderUpdate {
   bullets: string[];
   /** The "Newsletter angle" bullet, without its label. */
   angle?: string;
+  /**
+   * What a reader can be told: the bullets before the "Newsletter angle" one, with any sentence
+   * that speaks to the editor removed.
+   */
+  insights: string[];
+  /**
+   * What the write-up says to the editor, kept so it is never lost: the newsletter angle, the
+   * bullets after it, editor-directed sentences taken out of the insights, and for a held post
+   * the "Why it's held" and "Revisit" lines.
+   */
+  notes: string[];
 }
 
 const HEADER = /:studio_microphone:\s*\*(.+?)\s+·\s+(.+?)\s+·\s+([A-Za-z]{3},\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s*\*/;
@@ -148,28 +159,77 @@ export function parseFounderUpdate(text: string): FounderUpdate | undefined {
   const topicLine = afterHeader.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
 
   const bullets: string[] = [];
+  const afterBullets: string[] = [];
   const summaryAt = text.indexOf("*Summary*");
   if (summaryAt >= 0) {
+    let inBullets = true;
     for (const raw of text.slice(summaryAt + "*Summary*".length).split("\n")) {
       const line = raw.trim();
       if (line === "") continue;
-      if (!line.startsWith("•")) break; // the next section heading ends the bullet list
-      bullets.push(line.replace(/^•\s*/, ""));
+      if (inBullets && line.startsWith("•")) bullets.push(line.replace(/^•\s*/, ""));
+      else {
+        inBullets = false; // the next section heading ends the bullet list
+        afterBullets.push(line);
+      }
     }
   }
 
-  const angleBullet = bullets.find((b) => /^\*?Newsletter angle:\*?/i.test(b));
+  const angleAt = bullets.findIndex((b) => /^\*?Newsletter angle:\*?/i.test(b));
+  const angleBullet = angleAt >= 0 ? bullets[angleAt] : undefined;
+  const factual = (angleAt >= 0 ? bullets.slice(0, angleAt) : bullets).map(plain);
+  const trailing = (angleAt >= 0 ? bullets.slice(angleAt) : []).map(plain);
+
+  const insights: string[] = [];
+  const pulled: string[] = [];
+  for (const b of factual) {
+    const { keep, editorial } = splitEditorial(b);
+    if (keep) insights.push(keep);
+    pulled.push(...editorial);
+  }
+  // "*Why it's held*" then its text: fold each heading into the line that follows it.
+  const sections: string[] = [];
+  let heading = "";
+  for (const line of afterBullets) {
+    const h = /^\*([^*]+)\*$/.exec(line);
+    if (h) { heading = plain(h[1] ?? ""); continue; }
+    const body = plain(line.replace(/^→\s*/, ""));
+    if (body) sections.push(heading ? `${heading}: ${body}` : body);
+  }
+
   const update: FounderUpdate = {
     company: plain(head[1] ?? ""),
     person: plain(head[2] ?? ""),
     dateText: head[3] ?? "",
     topic: firstSentences(plain(topicLine), 1, 140),
     bullets: bullets.map(plain),
+    insights,
+    notes: [...trailing, ...pulled, ...sections].filter(Boolean),
   };
   const hold = HOLD.exec(text);
   if (hold) update.hold = plain(hold[1] ?? "");
   if (angleBullet) update.angle = plain(angleBullet.replace(/^\*?Newsletter angle:\*?\s*/i, ""));
   return update;
+}
+
+/** Sentences that open by telling the editor what to do, or by judging the material. */
+const EDITOR_OPENERS = /^(chase|check|confirm(ed (she|he|they))?|ask|publish|run|avoid|diarise|diarize|flag|include|lead with|worth asking|easy follow-up|that's the (story|close|substance)|rare case|better story|fails the bar|no relationship risk|clean, defensible|strong interactive)\b/i;
+/** Phrases that only make sense said to the editor, wherever they fall in a sentence. */
+const EDITOR_PHRASES = /\b(before we run|before quoting|before publishing|don't publish|do not publish|newsletter angle|follow-up piece|go on record|in print|the piece|whatever you write|for readers)\b/i;
+/** A label the write-up puts in front of a quote for the editor's benefit. */
+const EDITOR_LABEL = /^quotable:\s*/i;
+
+/**
+ * Separate what a reader can be told from what was said to the editor, sentence by sentence.
+ * This is pattern matching, not understanding: it removes the cautions seen in real write-ups and
+ * will miss phrasings it has not seen. Whatever it removes goes to the curator's notes rather than
+ * being discarded, and the curator still previews every draft before anything is sent.
+ */
+export function splitEditorial(bullet: string): { keep: string; editorial: string[] } {
+  const keep: string[] = [];
+  const editorial: string[] = [];
+  // splitSentences only ever cuts, so every sentence ends up in one list or the other.
+  for (const s of splitSentences(bullet.replace(EDITOR_LABEL, ""))) (EDITOR_OPENERS.test(s) || EDITOR_PHRASES.test(s) ? editorial : keep).push(s);
+  return { keep: keep.join(" "), editorial };
 }
 
 /** Slack emphasis markers and the tool's sign-off are presentation, not content. */
@@ -182,13 +242,15 @@ function cap(s: string, n: number): string {
 }
 
 function founderUpdateItem(u: FounderUpdate, source: SourceConfig, channel: string, ts: string, permalink: string): Item {
-  const headline = u.topic ? `${u.company}: ${u.topic}` : `${u.company} · ${u.person}`;
-  // A held post is shown, never hidden, but it says so first and a human must clear it.
-  const title = u.hold ? `MARKED FOR REVIEW: ${headline}` : headline;
+  // The title is what a reader would see. "MARKED FOR REVIEW" is the curator's label, added by the
+  // Slack list from requires_review, so it can never leak into a newsletter.
+  const title = u.topic ? `${u.company}: ${u.topic}` : `${u.company} · ${u.person}`;
+  // The line shown beside the item while choosing: a held post leads with its first two points,
+  // a clear one with the write-up's own newsletter angle.
   const summary = u.hold
-    ? cap(u.bullets.slice(0, 2).join(" "), 320)
-    : cap(u.angle ?? "", 320);
-  return {
+    ? cap(u.insights.slice(0, 2).join(" "), 320)
+    : cap(u.angle ?? u.insights[0] ?? "", 320);
+  const item: Item = {
     id: itemId(source.id, permalink),
     source: source.id,
     type: source.type,
@@ -207,7 +269,12 @@ function founderUpdateItem(u: FounderUpdate, source: SourceConfig, channel: stri
       u.topic,
       ...u.bullets,
     ].filter(Boolean).join(" ")),
+    byline: u.person,
   };
+  if (u.insights.length) item.insights = u.insights.slice(0, 5).map((s) => cap(s, 400));
+  if (u.notes.length) item.editor_notes = u.notes.slice(0, 8).map((s) => cap(s, 400));
+  if (u.hold) item.hold_note = u.hold;
+  return item;
 }
 
 /** Slack's own permalink for a message. Undefined on any failure; the caller must not guess one. */

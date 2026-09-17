@@ -25,6 +25,28 @@ export function escapeMrkdwn(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Pack whole entries into as few chunks as fit under the limit. An entry is never split across
+ * chunks and never dropped: a list of many candidates becomes several sections, not a truncated
+ * one. (Splitting the candidate list with chunkMrkdwn lost every entry past 2900 characters,
+ * because that function only breaks on blank lines and a list has none.)
+ */
+export function chunkEntries(entries: string[], limit = SECTION_LIMIT): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const entry of entries) {
+    const piece = entry.length > limit ? entry.slice(0, limit - 1) + "…" : entry;
+    if (cur && cur.length + 1 + piece.length > limit) {
+      out.push(cur);
+      cur = piece;
+    } else {
+      cur = cur ? `${cur}\n${piece}` : piece;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /** Split on blank lines so no chunk exceeds the section limit; a single oversized paragraph is hard-cut. */
 export function chunkMrkdwn(text: string, limit = SECTION_LIMIT): string[] {
   const out: string[] = [];

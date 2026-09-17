@@ -26,11 +26,35 @@ export function collapseWhitespace(s: string): string {
  * Extractive summary: the first N sentences of a text, cut to maxChars at a word boundary.
  * Returns "" when there is no usable text, so callers can flag needs_summary.
  */
-export function firstSentences(text: string, n: number, maxChars: number): string {
+/**
+ * Split text into sentences by finding boundaries, never by matching sentences. A boundary is
+ * end punctuation, any closing quotes, whitespace, then something that starts a sentence. Every
+ * character of the input lands in exactly one sentence, so nothing can be lost.
+ *
+ * The earlier approach matched `[^.!?]+[.!?]+` and dropped whatever did not fit. "Closed a $1.4M
+ * seed" lost everything before the decimal point and came out as "4M seed": a wrong figure, in a
+ * system whose whole promise is not to print wrong figures.
+ */
+export function splitSentences(text: string): string[] {
   const clean = collapseWhitespace(text);
-  if (!clean) return "";
-  const sentences = clean.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) ?? [clean];
-  let out = sentences.slice(0, n).join("").trim();
+  if (!clean) return [];
+  const out: string[] = [];
+  const boundary = /[.!?]+["”’')\]]*\s+(?=["“‘'([]*[A-Z0-9])/g;
+  let start = 0;
+  for (let m = boundary.exec(clean); m !== null; m = boundary.exec(clean)) {
+    const end = m.index + m[0].length;
+    out.push(clean.slice(start, end).trim());
+    start = end;
+  }
+  const tail = clean.slice(start).trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+export function firstSentences(text: string, n: number, maxChars: number): string {
+  const sentences = splitSentences(text);
+  if (sentences.length === 0) return "";
+  let out = sentences.slice(0, n).join(" ").trim();
   if (out.length > maxChars) {
     out = out.slice(0, maxChars);
     const cut = out.lastIndexOf(" ");

@@ -5,8 +5,9 @@
 import type { Draft } from "../draft/templates.js";
 import type { RankedItem } from "../pipeline/rank.js";
 import type { FirstWorkday } from "../schedule/first-workday.js";
+import type { Item } from "../schema.js";
 import { partsInZone } from "../clock.js";
-import { chunkMrkdwn, escapeMrkdwn, markdownToMrkdwn } from "./mrkdwn.js";
+import { chunkEntries, chunkMrkdwn, escapeMrkdwn, markdownToMrkdwn } from "./mrkdwn.js";
 
 export const ACTION = {
   select: "newsletter_select",
@@ -19,6 +20,9 @@ export const ACTION = {
 } as const;
 
 export const BLOCK_PREFIX = { select: "select_" } as const;
+
+/** The curator's label for an item the source put on hold. It belongs to Slack, never to a draft. */
+export const REVIEW_LABEL = "MARKED FOR REVIEW";
 const CHECKBOX_LIMIT = 10; // Slack allows at most 10 options per checkboxes element
 
 export interface ReminderInput {
@@ -59,8 +63,10 @@ export function reminderBlocks(input: ReminderInput): Block[] {
   blocks.push({ type: "divider" });
   // Numbered list with links (sections allow 3000 chars); checkbox labels must stay under 151 chars,
   // so they carry only the number and a short title. Every item keeps its link here (constraint 5).
-  const lines = candidates.map((c, n) => linkLine(c, n + 1, timeZone));
-  for (const chunk of chunkMrkdwn(lines.join("\n"), 2900)) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
+  // Whole entries are packed into as many sections as it takes. Every candidate keeps its link,
+  // however long the list gets.
+  const entries = candidates.map((c, n) => linkLine(c, n + 1, timeZone));
+  for (const chunk of chunkEntries(entries)) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
 
   for (let i = 0; i < candidates.length; i += CHECKBOX_LIMIT) {
     const slice = candidates.slice(i, i + CHECKBOX_LIMIT);
@@ -91,15 +97,47 @@ function linkLine(c: RankedItem, n: number, timeZone: string): string {
   const bits = [`${it.type} · ${when}`];
   if (it.related?.length) bits.push(`+${it.related.length} related`);
   if (it.needs_summary) bits.push("needs summary");
-  return `${n}. <${it.link}|${escapeMrkdwn(trim(it.title, 80))}> · ${bits.join(" · ")}`;
+  const head = `<${it.link}|${escapeMrkdwn(trim(it.title, 80))}> · ${bits.join(" · ")}`;
+  if (!it.requires_review) return `${n}. ${head}`;
+
+  // A held item leads with the label, then its first two points, the reason it is held, and the
+  // link to the exact message, so the decision can be made without leaving this list.
+  const points = (it.insights?.length ? it.insights : it.summary ? [it.summary] : []).slice(0, 2);
+  return [
+    `${n}. *${REVIEW_LABEL}* · ${head}`,
+    ...points.map((p) => `      • ${escapeMrkdwn(trim(p, 220))}`),
+    ...(it.hold_note ? [`      _On hold: ${escapeMrkdwn(it.hold_note)}_`] : []),
+  ].join("\n");
 }
 
 /** Checkbox option: text under 151 chars, description under 76 (Slack limits). */
 function option(c: RankedItem, n: number): { text: { type: "plain_text"; text: string }; description?: { type: "plain_text"; text: string }; value: string } {
   const it = c.item;
-  const text = trim(`${n}. ${it.title}`, 140);
+  // The label sits on the checkbox too, so it is visible at the moment of ticking.
+  const text = trim(`${n}. ${it.requires_review ? `${REVIEW_LABEL}: ` : ""}${it.title}`, 140);
   const description = trim(it.summary || `${it.type} · no summary yet`, 75);
   return { text: { type: "plain_text", text }, description: { type: "plain_text", text: description }, value: it.id };
+}
+
+/**
+ * What the curator should know about the items they just selected, posted with the drafts and
+ * never part of a newsletter: which selected items the source put on hold, and what each write-up
+ * said to the editor. The drafts leave these out on purpose, so this is where they surface.
+ */
+export function draftNotesBlocks(selected: Item[]): Block[] {
+  const blocks: Block[] = [];
+  const held = selected.filter((i) => i.requires_review);
+  if (held.length) {
+    const lines = held.map((i) => `• *${escapeMrkdwn(i.title)}*${i.hold_note ? ` · on hold: ${escapeMrkdwn(i.hold_note)}` : ""}`);
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `*${held.length} selected item${held.length === 1 ? " is" : "s are"} ${REVIEW_LABEL}.* ${held.length === 1 ? "It is" : "They are"} in these drafts because you ticked ${held.length === 1 ? "it" : "them"}. Check the hold still applies before you send.\n${lines.join("\n")}` } });
+  }
+  const withNotes = selected.filter((i) => i.editor_notes?.length);
+  if (withNotes.length) {
+    const entries = withNotes.map((i) => [`*${escapeMrkdwn(i.title)}*`, ...i.editor_notes!.map((n) => `      • ${escapeMrkdwn(trim(n, 300))}`)].join("\n"));
+    const chunks = chunkEntries(entries);
+    chunks.forEach((chunk, k) => blocks.push({ type: "section", text: { type: "mrkdwn", text: k === 0 ? `*Notes to the editor from the write-ups* (not in the newsletter)\n${chunk}` : chunk } }));
+  }
+  return blocks;
 }
 
 /** A link button opening the real rendered newsletter in a browser tab. */
@@ -119,10 +157,14 @@ export function draftBlocks(d: Draft, index: number, total: number, previewUrl?:
   return blocks;
 }
 
-export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, previewUrl?: string): Block[] {
+export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, previewUrl?: string, held: Item[] = []): Block[] {
   const blocks: Block[] = [
     { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.` } },
   ];
+  // The newsletter itself carries no review label, so the last place to say it is here, above Send.
+  if (held.length) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `*This newsletter includes ${held.length} item${held.length === 1 ? "" : "s"} ${REVIEW_LABEL}:*\n${held.map((i) => `• ${escapeMrkdwn(i.title)}${i.hold_note ? ` · on hold: ${escapeMrkdwn(i.hold_note)}` : ""}`).join("\n")}` } });
+  }
 
   if (!campaign) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "No email platform is configured, so this stops at the file. In production this step creates the campaign for you to send." }] });
@@ -136,7 +178,7 @@ export function approvedBlocks(d: Draft, paths: { html: string; md: string }, ca
   const elements: Block[] = [];
   if (previewUrl) elements.push(previewButton(previewUrl, "Preview the newsletter"));
   elements.push({ type: "button", action_id: ACTION.edit, text: { type: "plain_text", text: `Edit in ${campaign.platform}`, emoji: false }, url: campaign.editUrl });
-  elements.push({ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } });
+  elements.push({ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.${held.length ? `\n\nIt includes ${held.length} item${held.length === 1 ? "" : "s"} marked for review: ${escapeMrkdwn(trim(held.map((i) => i.title.split(":")[0]).join(", "), 120))}.` : ""}` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } });
   blocks.push({ type: "actions", block_id: `send_${d.id}`, elements });
   return blocks;
 }

@@ -31,7 +31,8 @@ const T = {
   events: "Upcoming events",
   news: "In the news",
   linkedin: "From Volta on LinkedIn",
-  members: "From our members",
+  insights: "Key insights",
+  withPerson: "With",
   openUpdate: "Read the update",
   ceo: "From the CEO",
   none: (section: string) => `No ${section.toLowerCase()} items this week.`,
@@ -50,16 +51,16 @@ const T = {
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
-  T.title, T.events, T.news, T.linkedin, T.members, T.openUpdate, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
+  T.title, T.events, T.news, T.linkedin, T.insights, T.withPerson, T.openUpdate, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
   T.brief, T.standard, T.eventsFirst, T.subjectPrefix, "Volta", "LinkedIn", "Halifax",
-  ...["upcoming events", "in the news", "from volta on linkedin", "from our members", "from the ceo"].map((s) => T.none(s)),
-  // A held founder update says so in its title; the label is the pipeline's, not the source's.
-  "MARKED FOR REVIEW",
+  ...["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => T.none(s)),
+  // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
+  // so if it ever reached a draft the verifier would reject it rather than wave it through.
 ];
 
 type Block =
   | { kind: "h1" | "h2" | "p"; text: string }
-  | { kind: "item"; title: string; meta: string[]; summary: string; links: { label: string; href: string }[] };
+  | { kind: "item"; title: string; meta: string[]; summary: string; bullets?: string[]; links: { label: string; href: string }[] };
 
 export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   const groups = groupItems(items);
@@ -107,27 +108,43 @@ function section(title: string, list: Item[], render: (it: Item) => Block): Bloc
   return blocks;
 }
 
-function briefBlocks(g: Groups, o: DraftOptions): Block[] {
-  const line = (it: Item): Block => ({ kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: [...primaryLink(it), ...relatedLinks(it)] });
-  return [...section(T.events, g.events, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.members.length ? section(T.members, g.members, line) : []), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
+/** Key insights appears only when a member update was selected; the other sections always show. */
+function insightsSection(g: Groups, render: (it: Item) => Block): Block[] {
+  return g.members.length ? section(T.insights, g.members, render) : [];
 }
 
+function briefBlocks(g: Groups, o: DraftOptions): Block[] {
+  const line = (it: Item): Block => {
+    const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: [...primaryLink(it), ...relatedLinks(it)] };
+    if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
+    return block;
+  };
+  return [...section(T.events, g.events, line), ...insightsSection(g, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
+}
+
+/** Standard leads with the stories: Key insights first, then events, news and LinkedIn. */
 function standardBlocks(g: Groups, o: DraftOptions): Block[] {
   return [
     { kind: "p", text: T.intro },
+    ...insightsSection(g, (it) => fullItem(it, o)),
     ...section(T.events, g.events, (it) => fullItem(it, o)),
     ...section(T.news, g.news, (it) => fullItem(it, o)),
     ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
-    ...(g.members.length ? section(T.members, g.members, (it) => fullItem(it, o)) : []),
     ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
   ];
 }
 
+/**
+ * Events first leads with the calendar. Every section keeps its own accurate heading; an earlier
+ * version merged LinkedIn posts and member updates under "In the news", which misstated the source.
+ */
 function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
-  const rest = [...g.news, ...g.linkedin, ...g.members, ...g.ceo].sort((a, b) => b.date.localeCompare(a.date));
   return [
     ...section(T.events, g.events, (it) => fullItem(it, o)),
-    ...section(T.news, rest, (it) => fullItem(it, o)),
+    ...insightsSection(g, (it) => fullItem(it, o)),
+    ...section(T.news, g.news, (it) => fullItem(it, o)),
+    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
+    ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
   ];
 }
 
@@ -137,7 +154,12 @@ function fullItem(it: Item, o: DraftOptions): Block {
     meta.push(`${T.when}: ${whenLine(it, o.timeZone)}`);
     if (it.location) meta.push(`${T.where}: ${it.location}`);
   }
-  return { kind: "item", title: it.title, meta, summary: it.summary, links: [...primaryLink(it), ...relatedLinks(it)] };
+  if (it.byline) meta.push(`${T.withPerson} ${it.byline}`);
+  const links = [...primaryLink(it), ...relatedLinks(it)];
+  // An item with insights is summarised by them. Its `summary` is the line shown while choosing,
+  // which for a founder update is advice to the editor and must not be printed for readers.
+  if (it.insights?.length) return { kind: "item", title: it.title, meta, summary: "", bullets: it.insights, links };
+  return { kind: "item", title: it.title, meta, summary: it.summary, links };
 }
 
 function primaryLink(it: Item): { label: string; href: string }[] {
@@ -176,6 +198,8 @@ export function renderMarkdown(blocks: Block[]): string {
       out.push(`**${b.title}**`);
       for (const m of b.meta) out.push(`${m}  `);
       if (b.summary) out.push(b.summary);
+      for (const point of b.bullets ?? []) out.push(`- ${point}`);
+      if (b.bullets?.length) out.push("");
       out.push(b.links.map((l) => `[${l.label}](${l.href})`).join(" · "), "");
     }
   }
@@ -191,8 +215,9 @@ export function renderHtml(blocks: Block[], title: string): string {
     else if (b.kind === "item") {
       const meta = b.meta.map((m) => `<p class="meta">${esc(m)}</p>`).join("");
       const summary = b.summary ? `<p>${esc(b.summary)}</p>` : "";
+      const bullets = b.bullets?.length ? `<ul>${b.bullets.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
       const links = b.links.map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join(" · ");
-      parts.push(`<article><h3>${esc(b.title)}</h3>${meta}${summary}<p>${links}</p></article>`);
+      parts.push(`<article><h3>${esc(b.title)}</h3>${meta}${summary}${bullets}<p>${links}</p></article>`);
     }
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>` +
