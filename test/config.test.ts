@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, validateConfig } from "../src/config.js";
 
 describe("demo/config.json", () => {
-  it("loads and has the live demo sources enabled: news searches, the calendar and LinkedIn", async () => {
+  it("loads and has the live demo sources enabled: news searches, the calendar, member updates and LinkedIn", async () => {
     const c = await loadConfig("demo/config.json");
     expect(c.timezone).toBe("America/Halifax");
     expect(c.sources.filter((s) => s.enabled).map((s) => s.id)).toEqual([
@@ -10,8 +10,10 @@ describe("demo/config.json", () => {
       "news-volta-effect",
       "news-volta-labs",
       "volta-calendar",
+      "member-updates",
       "volta-linkedin",
     ]);
+    expect(c.sources.find((s) => s.id === "member-updates")).toMatchObject({ kind: "slack_channel", type: "member_social", channel_id: "C0C2H7WAUJX" });
   });
 
   it("every news source is a keyword search whose URL is built from its terms", async () => {

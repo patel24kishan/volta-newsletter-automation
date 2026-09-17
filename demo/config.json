@@ -41,6 +41,14 @@
       "enabled": true
     },
     {
+      "id": "member-updates",
+      "kind": "slack_channel",
+      "type": "member_social",
+      "url": "",
+      "enabled": true,
+      "channel_id": "C0C2H7WAUJX"
+    },
+    {
       "id": "volta-linkedin",
       "kind": "linkedin_company",
       "type": "linkedin",

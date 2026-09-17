@@ -56,6 +56,20 @@ export class SlackChannelFetcher implements Fetcher {
       if (m.subtype !== undefined && m.subtype !== "file_share") continue; // joins, topic changes, bot noise
       const text = decodeEntities(String(m.text ?? ""));
       const ts = String(m.ts ?? "");
+
+      // Structured founder-update write-ups carry no external link: the Slack message is the source.
+      const update = parseFounderUpdate(text);
+      if (update) {
+        const permalink = await permalinkFor(call, channel, ts);
+        if (!permalink) {
+          // Never invent a link (constraint 5). Without a real permalink the item is not emitted.
+          warnings.push(`could not get a permalink for the ${update.company} update, so it was skipped`);
+          continue;
+        }
+        items.push(founderUpdateItem(update, source, channel, ts, permalink));
+        continue;
+      }
+
       const links = [...text.matchAll(SLACK_LINK)].map((x) => x[1] as string).filter(isAbsoluteHttpUrl);
       if (links.length === 0) {
         noLink++;
@@ -94,6 +108,116 @@ export class SlackChannelFetcher implements Fetcher {
     if (noLink) warnings.push(`${noLink} message(s) had no link and were skipped`);
     if (res.has_more === true) warnings.push("the channel had more messages than one page; only the most recent 200 were read");
     return { source: source.id, items, warnings, bytes };
+  }
+}
+
+/**
+ * A founder-update write-up as posted to the channel:
+ *
+ *   [:hourglass_flowing_sand: *HOLD — REVISIT w/c Sep 28 (embargo)*]     optional
+ *   :studio_microphone: *Company · Person, role · Thu, Sep 17, 2026*
+ *
+ *   One-line topic. 23 min, recorded.
+ *   *Conversation* ...
+ *   *Summary*
+ *   • bullet
+ *   • *Newsletter angle:* ...
+ */
+export interface FounderUpdate {
+  company: string;
+  /** "Yuki Tanaka, co-founder" */
+  person: string;
+  /** "Thu, Sep 17, 2026", kept as written for the excerpt. */
+  dateText: string;
+  topic: string;
+  /** Set when the post is on hold; the text after "HOLD —", e.g. "REVISIT w/c Sep 28 (embargo)". */
+  hold?: string;
+  /** Every bullet under *Summary*, markup removed. */
+  bullets: string[];
+  /** The "Newsletter angle" bullet, without its label. */
+  angle?: string;
+}
+
+const HEADER = /:studio_microphone:\s*\*(.+?)\s+·\s+(.+?)\s+·\s+([A-Za-z]{3},\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s*\*/;
+const HOLD = /:hourglass_flowing_sand:\s*\*HOLD\s*[—–-]\s*(.+?)\s*\*/;
+
+export function parseFounderUpdate(text: string): FounderUpdate | undefined {
+  const head = HEADER.exec(text);
+  if (!head) return undefined;
+  const afterHeader = text.slice(head.index + head[0].length);
+  const topicLine = afterHeader.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+
+  const bullets: string[] = [];
+  const summaryAt = text.indexOf("*Summary*");
+  if (summaryAt >= 0) {
+    for (const raw of text.slice(summaryAt + "*Summary*".length).split("\n")) {
+      const line = raw.trim();
+      if (line === "") continue;
+      if (!line.startsWith("•")) break; // the next section heading ends the bullet list
+      bullets.push(line.replace(/^•\s*/, ""));
+    }
+  }
+
+  const angleBullet = bullets.find((b) => /^\*?Newsletter angle:\*?/i.test(b));
+  const update: FounderUpdate = {
+    company: plain(head[1] ?? ""),
+    person: plain(head[2] ?? ""),
+    dateText: head[3] ?? "",
+    topic: firstSentences(plain(topicLine), 1, 140),
+    bullets: bullets.map(plain),
+  };
+  const hold = HOLD.exec(text);
+  if (hold) update.hold = plain(hold[1] ?? "");
+  if (angleBullet) update.angle = plain(angleBullet.replace(/^\*?Newsletter angle:\*?\s*/i, ""));
+  return update;
+}
+
+/** Slack emphasis markers and the tool's sign-off are presentation, not content. */
+function plain(s: string): string {
+  return collapseWhitespace(s.replace(/\*Sent using\*\s*Claude\s*$/i, "").replace(/\*([^*\n]+)\*/g, "$1").replace(/(^|\s)_([^_\n]+)_(?=\s|[.,;:!?]|$)/g, "$1$2"));
+}
+
+function cap(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
+}
+
+function founderUpdateItem(u: FounderUpdate, source: SourceConfig, channel: string, ts: string, permalink: string): Item {
+  const headline = u.topic ? `${u.company}: ${u.topic}` : `${u.company} · ${u.person}`;
+  // A held post is shown, never hidden, but it says so first and a human must clear it.
+  const title = u.hold ? `MARKED FOR REVIEW: ${headline}` : headline;
+  const summary = u.hold
+    ? cap(u.bullets.slice(0, 2).join(" "), 320)
+    : cap(u.angle ?? "", 320);
+  return {
+    id: itemId(source.id, permalink),
+    source: source.id,
+    type: source.type,
+    // When it was posted. The header's own date has no time of day, and posts land the same day.
+    date: new Date(Number(ts.split(".")[0]) * 1000).toISOString(),
+    title,
+    summary,
+    needs_summary: summary === "",
+    link: permalink,
+    source_ref: `slack:${channel}:${ts}`,
+    confidence: "high",
+    requires_review: u.hold !== undefined,
+    raw_excerpt: collapseWhitespace([
+      `${u.company} · ${u.person} · ${u.dateText}.`,
+      u.hold ? `HOLD — ${u.hold}.` : "",
+      u.topic,
+      ...u.bullets,
+    ].filter(Boolean).join(" ")),
+  };
+}
+
+/** Slack's own permalink for a message. Undefined on any failure; the caller must not guess one. */
+async function permalinkFor(call: SlackCall, channel: string, ts: string): Promise<string | undefined> {
+  try {
+    const r = await call("chat.getPermalink", { channel, message_ts: ts });
+    const link = r.ok === true ? String(r.permalink ?? "") : "";
+    return isAbsoluteHttpUrl(link) ? link : undefined;
+  } catch {
+    return undefined;
   }
 }
 

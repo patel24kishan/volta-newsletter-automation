@@ -31,6 +31,8 @@ const T = {
   events: "Upcoming events",
   news: "In the news",
   linkedin: "From Volta on LinkedIn",
+  members: "From our members",
+  openUpdate: "Read the update",
   ceo: "From the CEO",
   none: (section: string) => `No ${section.toLowerCase()} items this week.`,
   eventPage: "Event page",
@@ -48,9 +50,11 @@ const T = {
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
-  T.title, T.events, T.news, T.linkedin, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
+  T.title, T.events, T.news, T.linkedin, T.members, T.openUpdate, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
   T.brief, T.standard, T.eventsFirst, T.subjectPrefix, "Volta", "LinkedIn", "Halifax",
-  ...["events", "in the news", "from volta on linkedin", "from the ceo"].map((s) => T.none(s)),
+  ...["upcoming events", "in the news", "from volta on linkedin", "from our members", "from the ceo"].map((s) => T.none(s)),
+  // A held founder update says so in its title; the label is the pipeline's, not the source's.
+  "MARKED FOR REVIEW",
 ];
 
 type Block =
@@ -75,18 +79,19 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   });
 }
 
-interface Groups { events: Item[]; news: Item[]; linkedin: Item[]; ceo: Item[] }
+interface Groups { events: Item[]; news: Item[]; linkedin: Item[]; members: Item[]; ceo: Item[] }
 
 function groupItems(items: Item[]): Groups {
-  const g: Groups = { events: [], news: [], linkedin: [], ceo: [] };
+  const g: Groups = { events: [], news: [], linkedin: [], members: [], ceo: [] };
   for (const it of items) {
     if (it.type === "event") g.events.push(it);
     else if (it.type === "news") g.news.push(it);
     else if (it.type === "ceo_update") g.ceo.push(it);
+    else if (it.type === "member_social") g.members.push(it); // members' own updates are not Volta's LinkedIn
     else g.linkedin.push(it);
   }
   g.events.sort((a, b) => a.date.localeCompare(b.date));
-  for (const k of ["news", "linkedin", "ceo"] as const) g[k].sort((a, b) => b.date.localeCompare(a.date));
+  for (const k of ["news", "linkedin", "members", "ceo"] as const) g[k].sort((a, b) => b.date.localeCompare(a.date));
   return g;
 }
 
@@ -104,7 +109,7 @@ function section(title: string, list: Item[], render: (it: Item) => Block): Bloc
 
 function briefBlocks(g: Groups, o: DraftOptions): Block[] {
   const line = (it: Item): Block => ({ kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: [...primaryLink(it), ...relatedLinks(it)] });
-  return [...section(T.events, g.events, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
+  return [...section(T.events, g.events, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.members.length ? section(T.members, g.members, line) : []), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
 }
 
 function standardBlocks(g: Groups, o: DraftOptions): Block[] {
@@ -113,12 +118,13 @@ function standardBlocks(g: Groups, o: DraftOptions): Block[] {
     ...section(T.events, g.events, (it) => fullItem(it, o)),
     ...section(T.news, g.news, (it) => fullItem(it, o)),
     ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
+    ...(g.members.length ? section(T.members, g.members, (it) => fullItem(it, o)) : []),
     ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
   ];
 }
 
 function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
-  const rest = [...g.news, ...g.linkedin, ...g.ceo].sort((a, b) => b.date.localeCompare(a.date));
+  const rest = [...g.news, ...g.linkedin, ...g.members, ...g.ceo].sort((a, b) => b.date.localeCompare(a.date));
   return [
     ...section(T.events, g.events, (it) => fullItem(it, o)),
     ...section(T.news, rest, (it) => fullItem(it, o)),
@@ -135,7 +141,7 @@ function fullItem(it: Item, o: DraftOptions): Block {
 }
 
 function primaryLink(it: Item): { label: string; href: string }[] {
-  const label = it.type === "event" ? T.eventPage : it.type === "news" ? T.readMore : T.viewPost;
+  const label = it.type === "event" ? T.eventPage : it.type === "news" ? T.readMore : it.type === "member_social" ? T.openUpdate : T.viewPost;
   return [{ label, href: it.link }];
 }
 

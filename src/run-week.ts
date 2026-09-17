@@ -102,8 +102,11 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   const candidates = rankItems(summarized, now);
 
   // 3. Pre-select and draft (drafts are regenerated from Bader's own selection in D9)
+  // An item flagged requires_review (a held or embargoed founder update) is always listed for
+  // Bader, but is never pre-ticked and never written into a pre-generated draft, however quiet
+  // the week. Only a person can put it in. Ranking alone would not guarantee that.
   const n = o.preselect ?? 10;
-  const preselected = candidates.slice(0, n).map((c) => c.item);
+  const preselected = candidates.filter((c) => !c.item.requires_review).slice(0, n).map((c) => c.item);
   const drafts = buildDrafts(preselected, { timeZone: config.timezone });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {
