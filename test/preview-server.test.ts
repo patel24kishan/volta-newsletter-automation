@@ -40,6 +40,27 @@ describe("preview server", () => {
     expect(server.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 
+  it("serves several drafts at once, each under its own id", async () => {
+    server = await startPreviewServer(0);
+    const urls = ["brief", "standard", "events-first"].map((id) => [id, server!.put(`draft-${id}`, `<p>${id}</p>`)] as const);
+    for (const [id, url] of urls) expect(await (await fetch(url)).text()).toBe(`<p>${id}</p>`);
+  });
+
+  it("serves a full-size newsletter unchanged, byte for byte", async () => {
+    server = await startPreviewServer(0);
+    const html = `<!doctype html><html><body>${"<p>Volta &amp; friends — “quoted” • 60 chars of body text here.</p>".repeat(500)}</body></html>`;
+    const url = server.put("final", html);
+    const res = await fetch(url);
+    expect(await res.text()).toBe(html);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("ignores a query string, so a link with tracking params still resolves", async () => {
+    server = await startPreviewServer(0);
+    const url = server.put("final", "<p>ok</p>");
+    expect(await (await fetch(`${url}?from=slack`)).text()).toBe("<p>ok</p>");
+  });
+
   it("stops serving once closed", async () => {
     const s = await startPreviewServer(0);
     const url = s.put("final", "<p>hi</p>");
