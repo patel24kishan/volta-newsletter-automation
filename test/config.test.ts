@@ -2,14 +2,29 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, validateConfig } from "../src/config.js";
 
 describe("demo/config.json", () => {
-  it("loads and has the three live demo sources enabled", async () => {
+  it("loads and has the live demo sources enabled: news searches, the calendar and LinkedIn", async () => {
     const c = await loadConfig("demo/config.json");
     expect(c.timezone).toBe("America/Halifax");
     expect(c.sources.filter((s) => s.enabled).map((s) => s.id)).toEqual([
-      "google-news",
+      "news-volta",
+      "news-volta-effect",
+      "news-volta-labs",
       "volta-calendar",
       "volta-linkedin",
     ]);
+  });
+
+  it("every news source is a keyword search whose URL is built from its terms", async () => {
+    const c = await loadConfig("demo/config.json");
+    const news = c.sources.filter((s) => s.kind === "google_news");
+    expect(news.length).toBeGreaterThanOrEqual(3);
+    for (const s of news) {
+      expect(s.terms, s.id).toBeDefined();
+      expect(s.terms!.length, s.id).toBeGreaterThan(0);
+      expect(new URL(s.url).host, s.id).toBe("news.google.com");
+      // One search per source: Google News collapses results when many terms are OR'd together.
+      expect(new URL(s.url).searchParams.get("q"), s.id).not.toContain(" OR ");
+    }
   });
 });
 

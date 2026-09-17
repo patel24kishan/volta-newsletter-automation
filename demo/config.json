@@ -9,11 +9,28 @@
   "alert_recipients": ["bader", "maintainer"],
   "sources": [
     {
-      "id": "google-news",
-      "kind": "rss",
+      "id": "news-volta",
+      "kind": "google_news",
       "type": "news",
-      "url": "https://news.google.com/rss/search?q=%22Volta%22+Halifax&hl=en-CA&gl=CA&ceid=CA:en",
-      "enabled": true
+      "enabled": true,
+      "url": "",
+      "terms": ["Volta Halifax"]
+    },
+    {
+      "id": "news-volta-effect",
+      "kind": "google_news",
+      "type": "news",
+      "enabled": true,
+      "url": "",
+      "terms": ["Volta Effect"]
+    },
+    {
+      "id": "news-volta-labs",
+      "kind": "google_news",
+      "type": "news",
+      "enabled": true,
+      "url": "",
+      "terms": ["Volta Labs Halifax"]
     },
     {
       "id": "volta-calendar",

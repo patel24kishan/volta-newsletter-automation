@@ -4,18 +4,25 @@
  */
 import { readFile } from "node:fs/promises";
 import type { ItemType } from "./schema.js";
+import { googleNewsUrl } from "./sources/google-news.js";
 
-export type SourceKind = "rss" | "ics" | "linkedin_company";
+export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news";
 
 export interface SourceConfig {
   /** Stable id used in Item.source and in alerts. */
   id: string;
   kind: SourceKind;
   type: ItemType;
+  /** Resolved feed URL. For a google_news source this is built from `terms` at load time. */
   url: string;
   enabled: boolean;
   /** Human-facing page to link when an individual item has no URL of its own (events feeds). */
   fallback_link?: string;
+  /**
+   * google_news only: the search terms to track, OR'd together. Terms containing a space are
+   * searched as exact phrases. Edit this list to add or remove coverage; no deploy needed.
+   */
+  terms?: string[];
 }
 
 export interface Config {
@@ -89,7 +96,7 @@ export function validateConfig(value: unknown, where = "config"): Config {
     }
   }
 
-  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company"];
+  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company", "google_news"];
   if (!Array.isArray(c.sources) || c.sources.length === 0) {
     errors.push("sources must be a non-empty array");
   } else {
@@ -105,7 +112,22 @@ export function validateConfig(value: unknown, where = "config"): Config {
       else ids.add(src.id);
       if (!kinds.includes(src.kind as SourceKind)) errors.push(`sources[${i}].kind must be one of ${kinds.join(", ")}`);
       if (typeof src.type !== "string") errors.push(`sources[${i}].type missing`);
-      if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) errors.push(`sources[${i}].url must be http(s)`);
+
+      if (src.kind === "google_news") {
+        // The URL is built from the terms, so the maintainer never edits an encoded query string.
+        const terms = src.terms;
+        if (!Array.isArray(terms) || terms.length === 0 || !terms.every((t) => typeof t === "string" && t.trim() !== "")) {
+          errors.push(`sources[${i}].terms must be a non-empty array of search terms for a google_news source`);
+        } else {
+          try {
+            src.url = googleNewsUrl(terms as string[]);
+          } catch (e) {
+            errors.push(`sources[${i}]: ${(e as Error).message}`);
+          }
+        }
+      } else if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) {
+        errors.push(`sources[${i}].url must be http(s)`);
+      }
       if (typeof src.enabled !== "boolean") errors.push(`sources[${i}].enabled must be boolean`);
       if (src.fallback_link !== undefined && (typeof src.fallback_link !== "string" || !/^https?:\/\//.test(src.fallback_link))) {
         errors.push(`sources[${i}].fallback_link must be an http(s) URL when present`);
