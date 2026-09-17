@@ -96,9 +96,11 @@ describe("parseFounderUpdate", () => {
 
   it("keeps a decimal figure and a quotation whole (regression: \"$1.4M\" once came out as \"4M\")", () => {
     const u = parseFounderUpdate(FUNDING)!;
-    expect(u.insights[0]).toBe("Closed a $1.4M seed, led out of Montréal with two local angels. Nadia explicitly asked that the raise amount not lead.");
+    expect(u.insights[0]).toBe("Closed a $1.4M seed, led out of Montréal with two local angels.");
     expect(u.insights[1]).toBe("\"'The market is too small' often means 'I don't know this market.'\"");
     expect(u.notes).toContain("Confirmed she's happy for this to be used.");
+    // A selector cannot obey "don't lead with the raise", so the instruction goes to the curator.
+    expect(u.notes).toContain("Nadia explicitly asked that the raise amount not lead.");
   });
 
   it("recognises a hold, with or without an embargo, and turns its closing sections into notes", () => {
@@ -172,7 +174,11 @@ describe("founder updates through the channel fetcher", () => {
       link: `https://ghost24.slack.com/archives/C0C2H7WAUJX/p${t.replace(".", "")}`,
     });
     expect(item.summary).toMatch(/^"one forecast for an area/);
-    expect(item.insights).toHaveLength(3);
+    // The newsletter gets a condensed entry, not the write-up: two single-sentence points.
+    expect(item.insights).toEqual([
+      "Open beta of a hyperlocal marine forecast API — 6 km resolution versus Environment Canada's much larger marine zones.",
+      "Claims improvement on wind direction only; explicitly says wave height is no better.",
+    ]);
     expect(item.editor_notes).toHaveLength(3);
     expect(item.hold_note).toBeUndefined();
     // No submitter lookup is needed: the header already names who the update is about.
@@ -248,7 +254,7 @@ describe("held updates and the pre-generated drafts", () => {
       }
       // Insights, notes and the hold note survive storage.
       expect(storage.getItem(held.item.id)).toMatchObject({ hold_note: "REVISIT w/c Sep 28 (embargo)", byline: "Marc Comeau, co-founder" });
-      expect(storage.getItem(held.item.id)!.insights).toHaveLength(3);
+      expect(storage.getItem(held.item.id)!.insights).toHaveLength(2);
     } finally {
       storage.close();
       rmSync(outDir, { recursive: true, force: true });
@@ -289,6 +295,16 @@ describe("founder updates in the drafts", () => {
     const brief = drafts[0]!.markdown;
     expect(brief).toContain("- Open beta of a hyperlocal marine forecast API");
     expect(brief).not.toContain("- Public docs, free tier");
+
+    // An entry is a summary, not the write-up: at most two points and a bounded length.
+    // (Copying every bullet once made eight updates into 640 of a draft's 767 words.)
+    const section = standard.markdown.split("## Key insights")[1]!.split(/\n## /)[0]!;
+    const entries = section.split(/\n(?=\*\*)/).filter((e) => e.trim().startsWith("**"));
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) {
+      expect(entry.split("\n").filter((l) => l.startsWith("- ")).length, entry.slice(0, 40)).toBeLessThanOrEqual(2);
+      expect(entry.split(/\s+/).filter(Boolean).length, entry.slice(0, 40)).toBeLessThanOrEqual(70);
+    }
 
     // Nothing of theirs is filed under another source's heading.
     for (const heading of ["## In the news", "## From Volta on LinkedIn"]) {

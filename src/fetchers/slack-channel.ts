@@ -11,6 +11,7 @@
  */
 import type { SourceConfig } from "../config.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
+import { condense } from "../pipeline/condense.js";
 import { collapseWhitespace, decodeEntities, firstSentences, splitSentences } from "../text.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
@@ -83,7 +84,8 @@ export class SlackChannelFetcher implements Fetcher {
       // The note is whatever the submitter wrote, with the raw link markup removed.
       const note = collapseWhitespace(text.replace(SLACK_LINK, (_all, url: string, label?: string) => label ?? "").trim());
       const link = links[0] as string;
-      const summary = note ? firstSentences(note, 2, 280) : "";
+      // Condensed like every other entry from this channel, so a long pasted message stays short.
+      const summary = note ? cap(condense([note]).join(" "), 280) : "";
 
       const item: Item = {
         id: itemId(source.id, link),
@@ -214,7 +216,7 @@ export function parseFounderUpdate(text: string): FounderUpdate | undefined {
 /** Sentences that open by telling the editor what to do, or by judging the material. */
 const EDITOR_OPENERS = /^(chase|check|confirm(ed (she|he|they))?|ask|publish|run|avoid|diarise|diarize|flag|include|lead with|worth asking|easy follow-up|that's the (story|close|substance)|rare case|better story|fails the bar|no relationship risk|clean, defensible|strong interactive)\b/i;
 /** Phrases that only make sense said to the editor, wherever they fall in a sentence. */
-const EDITOR_PHRASES = /\b(before we run|before quoting|before publishing|don't publish|do not publish|newsletter angle|follow-up piece|go on record|in print|the piece|whatever you write|for readers)\b/i;
+const EDITOR_PHRASES = /\b(before we run|before quoting|before publishing|don't publish|do not publish|newsletter angle|follow-up piece|go on record|in print|the piece|whatever you write|for readers|explicitly (asked|confirmed)|asked that)\b/i;
 /** A label the write-up puts in front of a quote for the editor's benefit. */
 const EDITOR_LABEL = /^quotable:\s*/i;
 
@@ -245,11 +247,15 @@ function founderUpdateItem(u: FounderUpdate, source: SourceConfig, channel: stri
   // The title is what a reader would see. "MARKED FOR REVIEW" is the curator's label, added by the
   // Slack list from requires_review, so it can never leak into a newsletter.
   const title = u.topic ? `${u.company}: ${u.topic}` : `${u.company} · ${u.person}`;
-  // The line shown beside the item while choosing: a held post leads with its first two points,
-  // a clear one with the write-up's own newsletter angle.
+  // What goes in the newsletter is a condensed entry, not the write-up: at most two single-sentence
+  // points chosen from everything a reader may be told. Copying every bullet made eight updates
+  // into 640 of a draft's 767 words.
+  const points = condense(u.insights);
+  // The line shown beside the item while choosing: a held post leads with its points, a clear one
+  // with the write-up's own newsletter angle.
   const summary = u.hold
-    ? cap(u.insights.slice(0, 2).join(" "), 320)
-    : cap(u.angle ?? u.insights[0] ?? "", 320);
+    ? cap(points.join(" "), 320)
+    : cap(u.angle ?? points[0] ?? "", 320);
   const item: Item = {
     id: itemId(source.id, permalink),
     source: source.id,
@@ -271,7 +277,7 @@ function founderUpdateItem(u: FounderUpdate, source: SourceConfig, channel: stri
     ].filter(Boolean).join(" ")),
     byline: u.person,
   };
-  if (u.insights.length) item.insights = u.insights.slice(0, 5).map((s) => cap(s, 400));
+  if (points.length) item.insights = points;
   if (u.notes.length) item.editor_notes = u.notes.slice(0, 8).map((s) => cap(s, 400));
   if (u.hold) item.hold_note = u.hold;
   return item;
