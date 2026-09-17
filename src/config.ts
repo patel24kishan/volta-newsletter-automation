@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import type { ItemType } from "./schema.js";
 import { googleNewsUrl } from "./sources/google-news.js";
 
-export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news";
+export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news" | "slack_channel";
 
 export interface SourceConfig {
   /** Stable id used in Item.source and in alerts. */
@@ -23,6 +23,8 @@ export interface SourceConfig {
    * searched as exact phrases. Edit this list to add or remove coverage; no deploy needed.
    */
   terms?: string[];
+  /** slack_channel only: the channel to read, e.g. C0123ABCD. Found via the channel's About tab. */
+  channel_id?: string;
 }
 
 export interface Config {
@@ -96,7 +98,7 @@ export function validateConfig(value: unknown, where = "config"): Config {
     }
   }
 
-  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company", "google_news"];
+  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company", "google_news", "slack_channel"];
   if (!Array.isArray(c.sources) || c.sources.length === 0) {
     errors.push("sources must be a non-empty array");
   } else {
@@ -125,6 +127,12 @@ export function validateConfig(value: unknown, where = "config"): Config {
             errors.push(`sources[${i}]: ${(e as Error).message}`);
           }
         }
+      } else if (src.kind === "slack_channel") {
+        // Read over the Slack Web API, so there is no feed URL; it needs a channel id instead.
+        if (typeof src.channel_id !== "string" || !/^[A-Z0-9]{6,}$/.test(src.channel_id)) {
+          errors.push(`sources[${i}].channel_id must be a Slack channel id such as C0123ABCD for a slack_channel source`);
+        }
+        src.url = "";
       } else if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) {
         errors.push(`sources[${i}].url must be http(s)`);
       }

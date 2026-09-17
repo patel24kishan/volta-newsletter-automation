@@ -28,6 +28,10 @@ export interface RunOptions {
   outDir: string;
   /** Test hook: replaces the network for every fetcher. */
   fetchText?: FetchContext["fetchText"];
+  /** Test hook: replaces the Slack Web API for the channel fetcher. */
+  slackApi?: FetchContext["slackApi"];
+  /** Where fetcher credentials come from; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
   /** How many top-ranked items seed the pre-generated drafts. */
   preselect?: number;
 }
@@ -59,7 +63,12 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
     enabled.map(async (s) => {
       const f = fetcherFor(s.kind);
       if (!f) return { s, r: undefined };
-      const ctx: FetchContext = o.fetchText ? { config, clock, fetchText: o.fetchText } : { config, clock };
+      const ctx: FetchContext = {
+        config, clock,
+        ...(o.fetchText ? { fetchText: o.fetchText } : {}),
+        ...(o.slackApi ? { slackApi: o.slackApi } : {}),
+        ...(o.env ? { env: o.env } : {}),
+      };
       return { s, r: await f.fetch(s, ctx) };
     }),
   );

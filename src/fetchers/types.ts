@@ -7,6 +7,10 @@ export interface FetchContext {
   clock: Clock;
   /** Overrides the network for tests: return the raw body for a URL. */
   fetchText?: (url: string) => Promise<string>;
+  /** Overrides the Slack Web API for tests. */
+  slackApi?: (method: string, params: Record<string, string>) => Promise<Record<string, unknown>>;
+  /** Where credentials come from; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface FetchResult {
