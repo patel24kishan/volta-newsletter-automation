@@ -283,7 +283,9 @@ describe("founder updates in the drafts", () => {
     expect(standard.markdown).toContain("With Iris Thibodeau, founder");
     expect(standard.markdown).toContain("- Claims improvement on wind direction only; explicitly says wave height is no better.");
     expect(standard.markdown).toContain("- Closed a $1.4M seed, led out of Montréal with two local angels.");
-    expect(standard.markdown).toContain("[Read the update](https://ghost24.slack.com/archives/");
+    // The Slack permalink is for Bader's candidate list, not for a subscriber who cannot open it.
+    expect(standard.markdown).not.toContain("ghost24.slack.com");
+    expect(standard.html).not.toContain("ghost24.slack.com");
     expect(standard.html).toContain("<ul><li>Open beta of a hyperlocal marine forecast API");
     // A held item that a person chose reads like any other story.
     expect(standard.markdown).toContain("**Bellwether Soil: Good material, can't run it yet.**");

@@ -33,7 +33,6 @@ const T = {
   linkedin: "From Volta on LinkedIn",
   insights: "Key insights",
   withPerson: "With",
-  openUpdate: "Read the update",
   ceo: "From the CEO",
   none: (section: string) => `No ${section.toLowerCase()} items this week.`,
   eventPage: "Event page",
@@ -51,7 +50,7 @@ const T = {
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
-  T.title, T.events, T.news, T.linkedin, T.insights, T.withPerson, T.openUpdate, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
+  T.title, T.events, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
   T.brief, T.standard, T.eventsFirst, T.subjectPrefix, "Volta", "LinkedIn", "Halifax",
   ...["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => T.none(s)),
   // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
@@ -115,7 +114,7 @@ function insightsSection(g: Groups, render: (it: Item) => Block): Block[] {
 
 function briefBlocks(g: Groups, o: DraftOptions): Block[] {
   const line = (it: Item): Block => {
-    const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: [...primaryLink(it), ...relatedLinks(it)] };
+    const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: draftLinks(it) };
     if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
     return block;
   };
@@ -155,7 +154,7 @@ function fullItem(it: Item, o: DraftOptions): Block {
     if (it.location) meta.push(`${T.where}: ${it.location}`);
   }
   if (it.byline) meta.push(`${T.withPerson} ${it.byline}`);
-  const links = [...primaryLink(it), ...relatedLinks(it)];
+  const links = draftLinks(it);
   // An item with insights is summarised by them. Its `summary` is the line shown while choosing,
   // which for a founder update is advice to the editor and must not be printed for readers.
   if (it.insights?.length) return { kind: "item", title: it.title, meta, summary: "", bullets: it.insights, links };
@@ -163,8 +162,17 @@ function fullItem(it: Item, o: DraftOptions): Block {
 }
 
 function primaryLink(it: Item): { label: string; href: string }[] {
-  const label = it.type === "event" ? T.eventPage : it.type === "news" ? T.readMore : it.type === "member_social" ? T.openUpdate : T.viewPost;
+  const label = it.type === "event" ? T.eventPage : it.type === "news" ? T.readMore : T.viewPost;
   return [{ label, href: it.link }];
+}
+
+/**
+ * A member update's own link and its related links point into Volta's private Slack workspace:
+ * useful for Bader while choosing (the candidate list still shows it), meaningless to a subscriber
+ * who cannot open it. The newsletter itself carries no link for these entries.
+ */
+function draftLinks(it: Item): { label: string; href: string }[] {
+  return it.type === "member_social" ? [] : [...primaryLink(it), ...relatedLinks(it)];
 }
 
 function relatedLinks(it: Item): { label: string; href: string }[] {
@@ -200,7 +208,8 @@ export function renderMarkdown(blocks: Block[]): string {
       if (b.summary) out.push(b.summary);
       for (const point of b.bullets ?? []) out.push(`- ${point}`);
       if (b.bullets?.length) out.push("");
-      out.push(b.links.map((l) => `[${l.label}](${l.href})`).join(" · "), "");
+      if (b.links.length) out.push(b.links.map((l) => `[${l.label}](${l.href})`).join(" · "), "");
+      else out.push("");
     }
   }
   return out.join("\n").trim() + "\n";
@@ -216,8 +225,8 @@ export function renderHtml(blocks: Block[], title: string): string {
       const meta = b.meta.map((m) => `<p class="meta">${esc(m)}</p>`).join("");
       const summary = b.summary ? `<p>${esc(b.summary)}</p>` : "";
       const bullets = b.bullets?.length ? `<ul>${b.bullets.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
-      const links = b.links.map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join(" · ");
-      parts.push(`<article><h3>${esc(b.title)}</h3>${meta}${summary}${bullets}<p>${links}</p></article>`);
+      const links = b.links.length ? `<p>${b.links.map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join(" · ")}</p>` : "";
+      parts.push(`<article><h3>${esc(b.title)}</h3>${meta}${summary}${bullets}${links}</article>`);
     }
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>` +
