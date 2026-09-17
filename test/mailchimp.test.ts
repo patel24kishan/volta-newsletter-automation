@@ -122,6 +122,39 @@ describe("Approve and Send with a publisher", () => {
     expect(c.posts.at(-1)!.text).toMatch(/Sent via FakeMail/);
   });
 
+  it("the approval message previews the approved draft in Slack, above the Send button", async () => {
+    const c = new FakeClient();
+    const st = state(new FakePublisher());
+    await approveDraft(c, "D1", draft.id, st);
+    const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
+
+    // The preview carries the draft's own content and its item links.
+    const text = JSON.stringify(blocks);
+    expect(text).toContain("Preview of what will be sent");
+    expect(text).toContain("Yoga");
+    expect(text).toContain("https://e/1");
+
+    // Send stays last, so a long preview can never bury it.
+    const sendIdx = blocks.findIndex((b) => b.type === "actions");
+    const previewIdx = blocks.findIndex((b) => JSON.stringify(b).includes("Preview of what will be sent"));
+    expect(previewIdx).toBeGreaterThan(0);
+    expect(sendIdx).toBe(blocks.length - 1);
+    expect(sendIdx).toBeGreaterThan(previewIdx);
+    expect(blocks.length).toBeLessThanOrEqual(50);
+  });
+
+  it("a very long draft truncates the preview rather than losing the Send button", async () => {
+    const c = new FakeClient();
+    const st = state(new FakePublisher());
+    const huge = { ...draft, markdown: Array.from({ length: 120 }, (_, i) => `paragraph ${i} ` + "x".repeat(2500)).join("\n\n") };
+    st.drafts.set(draft.id, huge);
+    await approveDraft(c, "D1", draft.id, st);
+    const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
+    expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(JSON.stringify(blocks)).toContain("Preview truncated");
+    expect((blocks.at(-1) as { type: string }).type).toBe("actions");
+  });
+
   it("without a publisher, Approve says so and stops at the file", async () => {
     const c = new FakeClient();
     await approveDraft(c, "D1", draft.id, state());

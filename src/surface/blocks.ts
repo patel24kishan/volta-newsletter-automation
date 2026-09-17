@@ -113,10 +113,26 @@ export function draftBlocks(d: Draft, index: number, total: number): Block[] {
   return blocks;
 }
 
+/**
+ * Slack allows at most 50 blocks per message. The approval message spends a few on the
+ * confirmation, dividers and the Send button, so the preview is capped well below that: the
+ * Send button must never be pushed off the end of a long draft.
+ */
+const MAX_PREVIEW_SECTIONS = 40;
+
 export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }): Block[] {
   const blocks: Block[] = [
     { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.` } },
+    { type: "divider" },
+    { type: "context", elements: [{ type: "mrkdwn", text: "*Preview of what will be sent*" }] },
   ];
+  const chunks = chunkMrkdwn(markdownToMrkdwn(d.markdown));
+  for (const chunk of chunks.slice(0, MAX_PREVIEW_SECTIONS)) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
+  if (chunks.length > MAX_PREVIEW_SECTIONS) {
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `Preview truncated after ${MAX_PREVIEW_SECTIONS} sections. The full newsletter is in \`${paths.html}\`${campaign ? ` and in ${escapeMrkdwn(campaign.platform)}` : ""}.` }] });
+  }
+  blocks.push({ type: "divider" });
+
   if (!campaign) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "No email platform is configured, so this stops at the file. In production this step creates the campaign for you to send." }] });
     return blocks;
