@@ -13,8 +13,9 @@ export const ACTION = {
   generate: "newsletter_generate",
   approve: "newsletter_approve",
   send: "newsletter_send",
-  /** Link button: Slack still posts an interaction for it, so it needs an id to acknowledge. */
+  /** Link buttons: Slack still posts an interaction for these, so they need ids to acknowledge. */
   preview: "newsletter_preview",
+  edit: "newsletter_edit",
 } as const;
 
 export const BLOCK_PREFIX = { select: "select_" } as const;
@@ -129,11 +130,12 @@ export function approvedBlocks(d: Draft, paths: { html: string; md: string }, ca
     return blocks;
   }
 
-  blocks.push({ type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\nRead it first, <${campaign.editUrl}|open it in ${escapeMrkdwn(campaign.platform)}> to edit, or send it as is:` } });
+  blocks.push({ type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\nRead it, edit it, or send it as is:` } });
 
-  // Preview first, Send last: the destructive action stays the final thing you reach.
+  // Read, then edit, then send: the destructive action stays the final thing you reach.
   const elements: Block[] = [];
   if (previewUrl) elements.push(previewButton(previewUrl, "Preview the newsletter"));
+  elements.push({ type: "button", action_id: ACTION.edit, text: { type: "plain_text", text: `Edit in ${campaign.platform}`, emoji: false }, url: campaign.editUrl });
   elements.push({ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } });
   blocks.push({ type: "actions", block_id: `send_${d.id}`, elements });
   return blocks;

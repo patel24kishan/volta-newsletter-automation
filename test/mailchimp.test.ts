@@ -111,9 +111,10 @@ describe("Approve and Send with a publisher", () => {
     expect(pub.published).toEqual([draft.id]);
     const msg = c.posts.at(-1)!;
     expect(msg.text).toContain("https://mail.test/edit/1");
-    const actions = msg.blocks!.find((b) => (b as { type: string }).type === "actions") as { elements: Array<{ action_id: string; value: string; confirm?: unknown }> };
-    expect(actions.elements[0]).toMatchObject({ action_id: ACTION.send, value: `c_${draft.id}` });
-    expect(actions.elements[0]!.confirm).toBeDefined();
+    const actions = msg.blocks!.find((b) => (b as { type: string }).type === "actions") as { elements: Array<{ action_id: string; value?: string; confirm?: unknown }> };
+    const send = actions.elements.find((e) => e.action_id === ACTION.send)!;
+    expect(send).toMatchObject({ value: `c_${draft.id}` });
+    expect(send.confirm).toBeDefined();
     expect(JSON.stringify(msg.blocks)).toContain("Test list");
 
     expect(await sendCampaign(c, "D1", "c_someone_elses", st)).toBe(false);
@@ -139,19 +140,22 @@ describe("Approve and Send with a publisher", () => {
     const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
     const actions = blocks.at(-1) as { type: string; elements: Array<{ action_id: string; url?: string; style?: string }> };
     expect(actions.type).toBe("actions");
-    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.send]);
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.edit, ACTION.send]);
     expect(actions.elements[0]!.url).toBe("http://127.0.0.1:3111/preview/final");
-    expect(actions.elements[1]!.style).toBe("danger");
+    // Edit opens the campaign in the email platform; only Send is destructive.
+    expect(actions.elements[1]!.url).toBe("https://mail.test/edit/1");
+    expect(actions.elements[1]!.style).toBeUndefined();
+    expect(actions.elements[2]!.style).toBe("danger");
 
     // No inline markdown dump: the message stays short and points at the real rendering.
     expect(blocks.length).toBeLessThan(10);
   });
 
-  it("omits the preview button when no preview server is running", async () => {
+  it("omits the preview button when no preview server is running, keeping Edit and Send", async () => {
     const c = new FakeClient();
     await approveDraft(c, "D1", draft.id, state(new FakePublisher()));
     const actions = (c.posts.at(-1)!.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string }> };
-    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.send]);
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.edit, ACTION.send]);
   });
 
   it("each generated draft gets its own preview URL so they can be compared", async () => {
