@@ -1,5 +1,39 @@
 # Volta Weekly Newsletter Pipeline — Plan
 
+## Features to be added
+
+Not built. Each stays out of the pipeline until picked up; nothing here changes current behavior.
+
+1. **LinkedIn tag-mentions (posts where someone else tags Volta).** Owner decision (2026-09-18):
+   use LinkedIn's own Community Management API — the `SHARE_MENTION` notification feed plus the
+   Posts API — rather than search-scraping (verified dead: LinkedIn's guest search redirects to
+   sign-in; Google returned a live CAPTCHA) or self-submit (owner rejected it for this case).
+   Blocked on an external, gated LinkedIn partner application that only a Volta Page super admin
+   can start; not something the builder can do. Estimated cost: **$0/month in LinkedIn API fees**
+   — LinkedIn's own product page lists no charge for this API, and the commonly-quoted "$699+/mo"
+   figure found while researching belongs to a different, paid ad-analytics product, not this
+   one; treat as unconfirmed until Volta has a developer account to check. Full design, the exact
+   API calls, the access process, the cost research, and the tests ready to write once credentials
+   exist: see [docs/linkedin-tag-mentions-plan.md](docs/linkedin-tag-mentions-plan.md).
+
+2. **CEO transcripts as a source.** Original design (C4, 2026-09-15): Volta's own CEO's meeting
+   transcripts (Google Meet in a Drive folder, or wherever they land), extracted with a
+   public-safe filter, typed `ceo_update`. Not built. Distinct from the founder-update source that
+   *was* built from `#newsletter-keynotes` — that channel carries write-ups about member
+   companies, not Volta's own CEO. Needs from Volta: where transcripts actually live, and CEO
+   consent to being a source.
+
+3. **LLM-written summaries and drafts.** Owner decision (2026-09-15, reaffirmed since): no LLM.
+   Summaries are extractive (`condense()` in `src/pipeline/condense.ts`) and drafts are fixed
+   templates, so nothing can be invented. Revisiting this would mean writing actual newsletter
+   prose in Volta's voice instead of selecting the source's own sentences — a real capability
+   upgrade, and a new no-fabrication risk to design against, not a small change.
+
+4. **Local web curation page (D10).** The plan's fallback surface for when Slack isn't available.
+   Slack (D9) was built and is the working surface; the plain web page was never started.
+
+---
+
 ## Context
 
 Volta (startup hub, Halifax NS) has no weekly newsletter and wants one. Bader, events staff, would own it but cannot absorb manual production. The system must gather, dedupe, summarize, draft and schedule unattended, leaving Bader two decisions: pick items, press send. Every item must trace to a real retrieved source. This plan applies the course 4D framework (Delegation, Description, Discernment, Diligence): it works the brief back to a problem brief, resolves conflicts and blanks, chooses form factor and stack, and sets acceptance tests before code. Nothing is built until the [ASSUMED] fields below are confirmed.

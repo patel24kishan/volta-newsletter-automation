@@ -2,6 +2,7 @@
 # Feature gate: runs when a Claude Code turn ends (Stop hook).
 # - Gates if any file under src/ or test/ changed since the turn started: committed during the
 #   turn (diff against the commit recorded by turn-start.sh), uncommitted, or untracked.
+# - Checks that every changed source file is imported by at least one test file.
 # - Runs typecheck and tests. If anything fails, blocks the stop (exit 2) so Claude keeps fixing.
 #   If everything passes, surfaces the results to the user and lets the turn end.
 set -u
@@ -33,7 +34,37 @@ mkdir -p out
 log="out/gate.log"
 : > "$log"
 
+# Coverage check: every changed source file must be imported by at least one test file.
+# Green tests prove nothing about a module no test loads. Exempt: CLI entrypoints (thin wiring,
+# exercised by the demo commands) and type-only modules. Deleted files are skipped.
+untested=""
+while IFS= read -r f; do
+  case "$f" in
+    src/cli/*|*/types.ts|*.d.ts) continue ;;
+    src/*.ts) ;;
+    *) continue ;;
+  esac
+  [ -f "$f" ] || continue
+  module="${f%.ts}"
+  if ! grep -rqE "${module}(\.js|\.ts)?['\"]" test 2>/dev/null; then
+    untested="${untested}${f}
+"
+  fi
+done <<EOF
+$changed
+EOF
+
 status=0
+if [ -n "$untested" ]; then
+  status=1
+  {
+    echo "== coverage =="
+    echo "No test file imports these changed source files:"
+    printf '%s' "$untested" | sed 's/^/  /'
+    echo "Add a test under test/ that imports each one."
+    echo
+  } >> "$log"
+fi
 {
   echo "== typecheck =="
   npm run --silent typecheck 2>&1 || status=1
@@ -47,6 +78,10 @@ if [ "$status" -ne 0 ]; then
     echo "FEATURE GATE FAILED. Fix before ending the turn."
     echo "Changed files:"
     printf '%s\n' "$changed" | sed 's/^/  /'
+    if [ -n "$untested" ]; then
+      echo "Changed source files no test imports (add a test under test/ for each):"
+      printf '%s' "$untested" | sed 's/^/  /'
+    fi
     echo
     tail -n 60 "$log"
   } >&2
