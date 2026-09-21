@@ -4,8 +4,10 @@
  */
 import { App, LogLevel } from "@slack/bolt";
 import type { Alerter } from "../alerts.js";
-import { ACTION, selectedIdsFromState } from "./blocks.js";
-import { approveDraft, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
+import { validateManualEvent } from "../manual-events.js";
+import { manualEventFromFields } from "../manual-events.js";
+import { ACTION, ADD_EVENT, addEventErrorBlocks, addEventFields, addEventView, selectedIdsFromState } from "./blocks.js";
+import { addManualEvent, approveDraft, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
 
 export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter: Alerter): { app: App; client: SlackClient } {
   const botToken = env.SLACK_BOT_TOKEN;
@@ -29,6 +31,9 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
       const id = r.channel?.id;
       if (!id) throw new Error(`could not open a DM with ${userId}`);
       return id;
+    },
+    async updateMessage(args) {
+      await app.client.chat.update({ channel: args.channel, ts: args.ts, text: args.text, ...(args.blocks ? { blocks: args.blocks as never } : {}) });
     },
   };
 
@@ -56,6 +61,47 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     } catch (e) {
       alerter.alert("error", "slack", `generate failed: ${(e as Error).message}`, "check the logs");
       await client.postMessage({ channel, text: `Could not generate drafts: ${(e as Error).message}` });
+    }
+  });
+
+  app.action(ACTION.addEvent, async ({ ack, body, client: bolt }) => {
+    await ack();
+    const b = body as { trigger_id?: string; channel?: { id: string }; message?: { ts: string }; state?: unknown };
+    // Ticks live in the message, so remember them before the form takes over the screen.
+    if (b.channel?.id) rememberSelection(st, b.channel.id, selectedIdsFromState(b.state));
+    log("Add an event pressed");
+    if (!b.trigger_id) return;
+    try {
+      await bolt.views.open({
+        trigger_id: b.trigger_id,
+        view: addEventView({ timeZone: st.timeZone, now: st.now?.() ?? new Date() }) as never,
+      });
+    } catch (e) {
+      alerter.alert("error", "slack", `could not open the add-event form: ${(e as Error).message}`, "check the logs");
+    }
+  });
+
+  app.view(ADD_EVENT.callbackId, async ({ ack, body, view }) => {
+    const fields = addEventFields(view.state);
+    // Slack closes the form only on a clean ack, so validate before acking and send errors back.
+    const bodyUser = (body as { user?: { id?: string } }).user?.id;
+    if (env.SLACK_BADER_USER_ID && bodyUser !== env.SLACK_BADER_USER_ID) {
+      await ack({ response_action: "errors", errors: { [ADD_EVENT.field.title]: "Only the newsletter's curator can add an event." } } as never);
+      log(`add-event refused: ${bodyUser ?? "unknown user"} is not the curator`);
+      return;
+    }
+    const errors = validateManualEvent(manualEventFromFields(fields, st.timeZone), st.now?.() ?? new Date());
+    if (Object.keys(errors).length) {
+      await ack({ response_action: "errors", errors: addEventErrorBlocks(errors) } as never);
+      log(`add-event rejected: ${Object.values(errors).join(" ")}`);
+      return;
+    }
+    await ack();
+    try {
+      const { item } = await addManualEvent(client, fields, st);
+      log(item ? `event added: "${item.title}" (${item.date})` : "event not added: it failed a second check");
+    } catch (e) {
+      alerter.alert("error", "slack", `could not add the event: ${(e as Error).message}`, "check the logs");
     }
   });
 

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import type { ItemType } from "./schema.js";
 import { googleNewsUrl } from "./sources/google-news.js";
 
-export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news" | "slack_channel";
+export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news" | "slack_channel" | "manual";
 
 export interface SourceConfig {
   /** Stable id used in Item.source and in alerts. */
@@ -98,7 +98,7 @@ export function validateConfig(value: unknown, where = "config"): Config {
     }
   }
 
-  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company", "google_news", "slack_channel"];
+  const kinds: SourceKind[] = ["rss", "ics", "linkedin_company", "google_news", "slack_channel", "manual"];
   if (!Array.isArray(c.sources) || c.sources.length === 0) {
     errors.push("sources must be a non-empty array");
   } else {
@@ -131,6 +131,13 @@ export function validateConfig(value: unknown, where = "config"): Config {
         // Read over the Slack Web API, so there is no feed URL; it needs a channel id instead.
         if (typeof src.channel_id !== "string" || !/^[A-Z0-9]{6,}$/.test(src.channel_id)) {
           errors.push(`sources[${i}].channel_id must be a Slack channel id such as C0123ABCD for a slack_channel source`);
+        }
+        src.url = "";
+      } else if (src.kind === "manual") {
+        // Read from storage, so there is no feed URL. A hand-added event may have no link of its
+        // own, so the page to fall back to is required rather than optional here.
+        if (typeof src.fallback_link !== "string" || !/^https?:\/\//.test(src.fallback_link)) {
+          errors.push(`sources[${i}].fallback_link must be an http(s) page for a manual source, used when an added event has no link of its own`);
         }
         src.url = "";
       } else if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) {

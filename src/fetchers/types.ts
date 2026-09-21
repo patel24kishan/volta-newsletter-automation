@@ -1,10 +1,13 @@
 import type { Config, SourceConfig } from "../config.js";
 import type { Clock } from "../clock.js";
 import type { Item } from "../schema.js";
+import type { Storage } from "../storage.js";
 
 export interface FetchContext {
   config: Config;
   clock: Clock;
+  /** Set for sources that read what the curator entered rather than a feed (manual events). */
+  storage?: Storage;
   /** Overrides the network for tests: return the raw body for a URL. */
   fetchText?: (url: string) => Promise<string>;
   /** Overrides the Slack Web API for tests. */

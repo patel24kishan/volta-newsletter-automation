@@ -7,10 +7,14 @@ import { loadDotEnv } from "./env.js";
 import { loadConfig } from "../config.js";
 import { resolveClock } from "../clock.js";
 import { fetcherFor } from "../fetchers/index.js";
+import { SqliteStorage } from "../storage.js";
 
 loadDotEnv();
 const config = await loadConfig(process.env.CONFIG_PATH ?? "demo/config.json");
 const clock = resolveClock();
+const outDir = process.env.OUT_DIR ?? "out";
+// The manual-events source reads what the curator added rather than a feed, so it needs storage.
+const storage = new SqliteStorage(process.env.DATABASE_PATH ?? `${outDir}/newsletter.sqlite`);
 
 console.log(`check:sources  clock=${clock.label}  now=${clock.now().toISOString()}  window=${config.content_window_days}d back / ${config.events_window_days}d ahead`);
 console.log("");
@@ -27,7 +31,7 @@ for (const source of config.sources) {
     continue;
   }
   const started = Date.now();
-  const r = await fetcher.fetch(source, { config, clock });
+  const r = await fetcher.fetch(source, { config, clock, storage });
   const ms = Date.now() - started;
   if (r.error) {
     failures++;
@@ -44,6 +48,7 @@ for (const source of config.sources) {
   for (const w of r.warnings) console.log(`         ! ${w}`);
 }
 
+storage.close();
 console.log("");
 if (failures) {
   console.log(`${failures} source(s) failed or returned nothing. A human should look before newsletter day.`);

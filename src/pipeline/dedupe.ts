@@ -7,10 +7,12 @@
  *  2. Near-identical titles (token containment or Jaccard >= 0.6 after normalization).
  *  3. A non-event item that names an upcoming event's title and its calendar date is attached to
  *     that event (the LinkedIn "join us for yoga on September 24" case).
+ * Events the curator added by hand are matched differently; see `matches` below.
  *
  * Survivor choice: event > news > linkedin > other, then higher confidence, then earlier date.
  */
-import { partsInZone } from "../clock.js";
+import { localDateString, partsInZone } from "../clock.js";
+import { isManualItem } from "../manual-events.js";
 import type { Item, RelatedLink } from "../schema.js";
 
 export interface DedupeResult {
@@ -33,9 +35,17 @@ export function dedupeItems(input: Item[], timeZone: string): DedupeResult {
   const survivors: Item[] = [];
 
   for (const cand of items) {
-    const target = survivors.find((s) => sameLink(s, cand) || similarTitle(s, cand) || mentionsEvent(s, cand, timeZone));
+    const target = survivors.find((s) => matches(s, cand, timeZone));
     if (!target) {
       survivors.push(cand);
+      continue;
+    }
+    // A hand-added event is the curator saying "this is happening". Once the real listing appears,
+    // the listing wins (it sorts first, so it is already the survivor) and the manual copy is
+    // dropped rather than folded: its link is only the generic events page, so keeping it as a
+    // "related" link would add a second link to the same page under a different name.
+    if (isManualItem(cand) && !isManualItem(target)) {
+      merges.push(`"${cand.title}" (added manually) dropped in favour of "${target.title}" (${target.source})`);
       continue;
     }
     fold(target, cand);
@@ -43,6 +53,24 @@ export function dedupeItems(input: Item[], timeZone: string): DedupeResult {
   }
   for (const s of survivors) if (s.related && s.related.length === 0) delete s.related;
   return { items: survivors, merges };
+}
+
+/**
+ * Hand-added events need their own rules. Every one of them can share the same fallback link (the
+ * events page), so the link test would merge two unrelated events; and a title alone is too weak
+ * when the curator and the calendar describe the same kind of event on different days, so a match
+ * against a real listing also has to fall on the same local day.
+ */
+function matches(survivor: Item, cand: Item, timeZone: string): boolean {
+  if (isManualItem(survivor) || isManualItem(cand)) {
+    if (isManualItem(survivor) && isManualItem(cand)) return false;
+    return similarTitle(survivor, cand) && sameLocalDay(survivor, cand, timeZone);
+  }
+  return sameLink(survivor, cand) || similarTitle(survivor, cand) || mentionsEvent(survivor, cand, timeZone);
+}
+
+function sameLocalDay(a: Item, b: Item, timeZone: string): boolean {
+  return localDateString(new Date(a.date), timeZone) === localDateString(new Date(b.date), timeZone);
 }
 
 function fold(target: Item, dup: Item): void {

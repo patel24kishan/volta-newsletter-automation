@@ -5,7 +5,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { validateManualEvent, type ManualEvent, type NewManualEvent } from "./manual-events.js";
 import { EXTRA_FIELDS, validateItem, type Item, type RelatedLink } from "./schema.js";
+import { collapseWhitespace } from "./text.js";
 
 export interface Storage {
   /** Insert or replace items by id. Returns the number written. */
@@ -14,6 +17,10 @@ export interface Storage {
   listItems(fromIso: string, toIso: string): Item[];
   getItem(id: string): Item | undefined;
   countItems(): number;
+  /** Save an event the curator entered by hand. Throws StorageError if it is invalid. */
+  addManualEvent(input: NewManualEvent): ManualEvent;
+  /** Hand-added events starting within [fromIso, toIso], earliest first. */
+  listManualEvents(fromIso: string, toIso: string): ManualEvent[];
   close(): void;
 }
 
@@ -45,6 +52,16 @@ export class SqliteStorage implements Storage {
         fetched_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS items_date ON items(date);
+      CREATE TABLE IF NOT EXISTS manual_events (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        starts_at TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        link TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS manual_events_start ON manual_events(starts_at);
     `);
     this.migrate();
   }
@@ -115,6 +132,33 @@ export class SqliteStorage implements Storage {
   countItems(): number {
     const row = this.db.prepare("SELECT COUNT(*) AS n FROM items").get() as { n: number };
     return row.n;
+  }
+
+  addManualEvent(input: NewManualEvent): ManualEvent {
+    const errors = validateManualEvent(input);
+    if (Object.keys(errors).length) throw new StorageError(`refusing to store invalid manual event: ${Object.values(errors).join(" ")}`);
+    const event: ManualEvent = {
+      id: `me_${randomUUID()}`,
+      title: collapseWhitespace(input.title),
+      // Canonical form (with ms) so the lexical comparison in listManualEvents is exact.
+      starts_at: new Date(input.starts_at).toISOString(),
+      location: collapseWhitespace(input.location ?? ""),
+      description: collapseWhitespace(input.description ?? ""),
+      link: (input.link ?? "").trim(),
+      created_at: new Date().toISOString(),
+    };
+    this.db
+      .prepare("INSERT INTO manual_events (id, title, starts_at, location, description, link, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(event.id, event.title, event.starts_at, event.location, event.description, event.link, event.created_at);
+    return event;
+  }
+
+  listManualEvents(fromIso: string, toIso: string): ManualEvent[] {
+    const from = new Date(fromIso).toISOString();
+    const to = new Date(toIso).toISOString();
+    return this.db
+      .prepare("SELECT id, title, starts_at, location, description, link, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
+      .all(from, to) as unknown as ManualEvent[];
   }
 
   close(): void {

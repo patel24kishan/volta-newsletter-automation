@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { resolveClock } from "../src/clock.js";
 import type { Config, SourceConfig } from "../src/config.js";
-import { IcsFetcher, parseIcs, parseIcsDate, parseProperty, unfold, zonedToUtc } from "../src/fetchers/ics.js";
+import { zonedToUtc } from "../src/clock.js";
+import { IcsFetcher, parseIcs, parseIcsDate, parseProperty, unfold } from "../src/fetchers/ics.js";
 import { validateItem } from "../src/schema.js";
 import { firstSentences } from "../src/text.js";
 

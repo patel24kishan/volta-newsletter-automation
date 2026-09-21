@@ -64,7 +64,7 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
       const f = fetcherFor(s.kind);
       if (!f) return { s, r: undefined };
       const ctx: FetchContext = {
-        config, clock,
+        config, clock, storage,
         ...(o.fetchText ? { fetchText: o.fetchText } : {}),
         ...(o.slackApi ? { slackApi: o.slackApi } : {}),
         ...(o.env ? { env: o.env } : {}),

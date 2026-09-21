@@ -6,16 +6,21 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Alerter } from "../alerts.js";
+import type { SourceConfig } from "../config.js";
 import { buildDrafts, type Draft } from "../draft/templates.js";
-import type { RankedItem } from "../pipeline/rank.js";
+import { itemFromManualEvent, manualEventFromFields, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
+import { rankItems, type RankedItem } from "../pipeline/rank.js";
 import { assertLive } from "../runtime.js";
 import type { Item } from "../schema.js";
+import type { Storage } from "../storage.js";
 import type { Publisher } from "../publish/types.js";
 import { approvedBlocks, draftBlocks, draftNotesBlocks, reminderBlocks, sentBlocks, type ReminderInput } from "./blocks.js";
 
 export interface SlackClient {
   postMessage(args: { channel: string; text: string; blocks?: unknown[]; thread_ts?: string }): Promise<{ ts?: string; channel?: string }>;
   openDm(userId: string): Promise<string>;
+  /** Re-render a message already posted, so the candidate list stays one message. */
+  updateMessage?(args: { channel: string; ts: string; text: string; blocks?: unknown[] }): Promise<void>;
 }
 
 export interface SurfaceState {
@@ -33,13 +38,66 @@ export interface SurfaceState {
   audience?: { audienceName: string; memberCount: number };
   /** Campaign ids created this session, so Send only acts on what Approve created. */
   campaigns: Set<string>;
+  /** The reminder as posted, so an added event can be merged into that same message. */
+  reminder?: { input: ReminderInput; channel: string; ts?: string };
+  /** Where events the curator adds are kept. Absent means the Add an event form is not offered. */
+  storage?: Pick<Storage, "addManualEvent">;
+  /** The manual source's config, so an added event links and types like a calendar event. */
+  manualSource?: SourceConfig & { fallback_link: string };
+  /** The run's clock, so re-ranking after an addition matches the ranking already shown. */
+  now?: () => Date;
 }
 
 export async function sendReminder(client: SlackClient, userId: string, input: ReminderInput, st: SurfaceState): Promise<{ channel: string; ts?: string }> {
   assertLive("send the Slack reminder DM", st.env);
   const channel = await client.openDm(userId);
-  const res = await client.postMessage({ channel, text: `This week's newsletter is ready: ${input.candidates.length} candidate item(s). Open Slack to select and generate drafts.`, blocks: reminderBlocks(input) });
+  const res = await client.postMessage({ channel, text: reminderText(input.candidates.length), blocks: reminderBlocks(input) });
+  st.reminder = { input, channel, ...(res.ts ? { ts: res.ts } : {}) };
   return { channel, ...(res.ts ? { ts: res.ts } : {}) };
+}
+
+function reminderText(n: number): string {
+  return `This week's newsletter is ready: ${n} candidate item(s). Open Slack to select and generate drafts.`;
+}
+
+/**
+ * Add an event the curator knows about that no source lists. It is stored, so it survives a
+ * restart and reappears on the next run, then shown in the candidate list already ticked: adding
+ * it is the decision, so it should not have to be made twice. Nothing is invented on their behalf,
+ * and the list labels the item as theirs.
+ */
+export async function addManualEvent(client: SlackClient, fields: ManualEventFields, st: SurfaceState): Promise<{ item?: Item; errors?: ManualEventErrors }> {
+  assertLive("add an event to the candidate list", st.env);
+  if (!st.storage || !st.manualSource) throw new Error("no manual events source is configured, so an event cannot be added");
+  const input = manualEventFromFields(fields, st.timeZone);
+  const errors = validateManualEvent(input, st.now?.() ?? new Date());
+  if (Object.keys(errors).length) return { errors };
+
+  const saved = st.storage.addManualEvent(input);
+  const item = itemFromManualEvent(saved, st.manualSource, st.manualSource.fallback_link);
+  st.candidates = rankItems([...st.candidates.map((c) => c.item), item], st.now?.() ?? new Date());
+
+  const r = st.reminder;
+  if (!r) return { item };
+  // Whatever was already ticked stays ticked, and the new event joins them.
+  const ticked = st.selections.get(r.channel) ?? r.input.preselectedIds;
+  const nextInput: ReminderInput = { ...r.input, candidates: st.candidates, preselectedIds: [...new Set([...ticked, item.id])] };
+  st.reminder = { ...r, input: nextInput };
+  st.selections.set(r.channel, nextInput.preselectedIds);
+
+  const blocks = reminderBlocks(nextInput);
+  const text = reminderText(nextInput.candidates.length);
+  // Editing the original message keeps one list. A restart loses its timestamp, so post afresh.
+  if (client.updateMessage && r.ts) {
+    try {
+      await client.updateMessage({ channel: r.channel, ts: r.ts, text, blocks });
+      await client.postMessage({ channel: r.channel, text: `Added "${item.title}". It is in the list above, ticked.`, thread_ts: r.ts });
+      return { item };
+    } catch { /* fall through to a fresh message */ }
+  }
+  const res = await client.postMessage({ channel: r.channel, text, blocks });
+  st.reminder = { input: nextInput, channel: r.channel, ...(res.ts ? { ts: res.ts } : {}) };
+  return { item };
 }
 
 export function rememberSelection(st: SurfaceState, channel: string, ids: string[]): void {

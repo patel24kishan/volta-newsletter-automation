@@ -6,7 +6,8 @@ import type { Draft } from "../draft/templates.js";
 import type { RankedItem } from "../pipeline/rank.js";
 import type { FirstWorkday } from "../schedule/first-workday.js";
 import type { Item } from "../schema.js";
-import { partsInZone } from "../clock.js";
+import { localDateString, partsInZone } from "../clock.js";
+import { isManualItem, MANUAL_LIMITS, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
 import { chunkEntries, chunkMrkdwn, escapeMrkdwn, markdownToMrkdwn } from "./mrkdwn.js";
 
 export const ACTION = {
@@ -14,11 +15,22 @@ export const ACTION = {
   generate: "newsletter_generate",
   approve: "newsletter_approve",
   send: "newsletter_send",
+  addEvent: "newsletter_add_event",
   /** A link button: Slack still posts an interaction for it, so it needs an id to acknowledge. */
   edit: "newsletter_edit",
 } as const;
 
+/** The form for an event no source lists yet. Its blocks are keyed so errors land on the field. */
+export const ADD_EVENT = {
+  callbackId: "newsletter_add_event_form",
+  value: "value",
+  field: { title: "ev_title", date: "ev_date", time: "ev_time", location: "ev_location", description: "ev_description", link: "ev_link" },
+} as const;
+
 export const BLOCK_PREFIX = { select: "select_" } as const;
+
+/** Said in the candidate list and nowhere else, so the newsletter never claims a source it lacks. */
+export const MANUAL_LABEL = "added by you";
 
 /** The curator's label for an item the source put on hold. It belongs to Slack, never to a draft. */
 export const REVIEW_LABEL = "MARKED FOR REVIEW";
@@ -53,6 +65,14 @@ export function reminderBlocks(input: ReminderInput): Block[] {
     },
   ];
   for (const note of input.sourceNotes) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: escapeMrkdwn(note) }] });
+
+  // Offered even in a week with no candidates: knowing about an unlisted event is the likeliest
+  // reason to open this message when every source was quiet.
+  blocks.push({
+    type: "actions",
+    block_id: "add_event_actions",
+    elements: [{ type: "button", action_id: ACTION.addEvent, text: { type: "plain_text", text: "Add an event", emoji: false }, value: "add_event" }],
+  });
 
   if (candidates.length === 0) {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "No items were found from any source this week. Nothing to select." } });
@@ -94,6 +114,7 @@ function linkLine(c: RankedItem, n: number, timeZone: string): string {
   const p = partsInZone(new Date(it.date), timeZone);
   const when = it.type === "event" ? `${cap(p.weekday)} ${p.month}/${p.day}` : `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
   const bits = [`${it.type} · ${when}`];
+  if (isManualItem(it)) bits.push(MANUAL_LABEL);
   if (it.related?.length) bits.push(`+${it.related.length} related`);
   if (it.needs_summary) bits.push("needs summary");
   const head = `<${it.link}|${escapeMrkdwn(trim(it.title, 80))}> · ${bits.join(" · ")}`;
@@ -137,6 +158,70 @@ export function draftNotesBlocks(selected: Item[]): Block[] {
     chunks.forEach((chunk, k) => blocks.push({ type: "section", text: { type: "mrkdwn", text: k === 0 ? `*Notes to the editor from the write-ups* (not in the newsletter)\n${chunk}` : chunk } }));
   }
   return blocks;
+}
+
+/**
+ * The form for an event no source lists yet. Only the name, date and time are required: a link may
+ * not exist yet, and a blank description marks the item "needs summary" rather than inventing one.
+ * The time is labelled with the newsletter's timezone, because that is how it is read back.
+ */
+export function addEventView(opts: { timeZone: string; now: Date; privateMetadata?: string }): Record<string, unknown> {
+  const input = (block: string, label: string, element: Block, optional = false, hint?: string): Block => ({
+    type: "input", block_id: block, label: { type: "plain_text", text: label, emoji: false }, element,
+    ...(optional ? { optional: true } : {}),
+    ...(hint ? { hint: { type: "plain_text", text: hint, emoji: false } } : {}),
+  });
+  const text = (max: number, placeholder: string): Block => ({
+    type: "plain_text_input", action_id: ADD_EVENT.value, max_length: max,
+    placeholder: { type: "plain_text", text: placeholder, emoji: false },
+  });
+  return {
+    type: "modal",
+    callback_id: ADD_EVENT.callbackId,
+    title: { type: "plain_text", text: "Add an event", emoji: false },
+    submit: { type: "plain_text", text: "Add to the list", emoji: false },
+    close: { type: "plain_text", text: "Cancel", emoji: false },
+    ...(opts.privateMetadata ? { private_metadata: opts.privateMetadata } : {}),
+    blocks: [
+      { type: "context", elements: [{ type: "mrkdwn", text: "For something that is happening but is not on the calendar or in the news yet. It joins the list already ticked." }] },
+      input(ADD_EVENT.field.title, "Event name", text(MANUAL_LIMITS.title, "Demo Night")),
+      input(ADD_EVENT.field.date, "Date", { type: "datepicker", action_id: ADD_EVENT.value, initial_date: localDateString(opts.now, opts.timeZone) }),
+      input(ADD_EVENT.field.time, "Start time", { type: "timepicker", action_id: ADD_EVENT.value, initial_time: "18:00" }, false, `In ${opts.timeZone} time.`),
+      input(ADD_EVENT.field.location, "Location", text(MANUAL_LIMITS.location, "Volta, 1505 Barrington St"), true),
+      input(ADD_EVENT.field.description, "One line about it", text(MANUAL_LIMITS.description, "An evening of founder demos."), true,
+        "Appears in the newsletter word for word. Leave it blank and the item is flagged as needing a summary."),
+      input(ADD_EVENT.field.link, "Link", { type: "url_text_input", action_id: ADD_EVENT.value }, true,
+        "Optional. Blank links to the events page instead."),
+    ],
+  };
+}
+
+/** Read the submitted form. Values only, so validation and its messages stay in one place. */
+export function addEventFields(viewState: unknown): ManualEventFields {
+  const values = (viewState as { values?: Record<string, Record<string, Record<string, unknown>>> } | undefined)?.values ?? {};
+  const read = (block: string, key: string): string => {
+    const v = values[block]?.[ADD_EVENT.value]?.[key];
+    return typeof v === "string" ? v.trim() : "";
+  };
+  return {
+    title: read(ADD_EVENT.field.title, "value"),
+    date: read(ADD_EVENT.field.date, "selected_date"),
+    time: read(ADD_EVENT.field.time, "selected_time"),
+    location: read(ADD_EVENT.field.location, "value"),
+    description: read(ADD_EVENT.field.description, "value"),
+    link: read(ADD_EVENT.field.link, "value"),
+  };
+}
+
+/** Field errors keyed by the block Slack should show them under. */
+export function addEventErrorBlocks(errors: ManualEventErrors): Record<string, string> {
+  const map: Array<[keyof ManualEventErrors, string]> = [
+    ["title", ADD_EVENT.field.title], ["starts_at", ADD_EVENT.field.date],
+    ["location", ADD_EVENT.field.location], ["description", ADD_EVENT.field.description], ["link", ADD_EVENT.field.link],
+  ];
+  const out: Record<string, string> = {};
+  for (const [key, block] of map) if (errors[key]) out[block] = errors[key]!;
+  return out;
 }
 
 export function draftBlocks(d: Draft, index: number, total: number): Block[] {

@@ -1,6 +1,7 @@
 import type { SourceConfig } from "../config.js";
 import { IcsFetcher } from "./ics.js";
 import { LinkedInCompanyFetcher } from "./linkedin.js";
+import { ManualEventsFetcher } from "./manual.js";
 import { RssFetcher } from "./rss.js";
 import { SlackChannelFetcher } from "./slack-channel.js";
 import type { Fetcher } from "./types.js";
@@ -12,6 +13,7 @@ const registry: Partial<Record<SourceConfig["kind"], Fetcher>> = {
   ics: new IcsFetcher(),
   linkedin_company: new LinkedInCompanyFetcher(),
   slack_channel: new SlackChannelFetcher(),
+  manual: new ManualEventsFetcher(),
 };
 
 /** Returns undefined for source kinds whose fetcher is not built yet. */

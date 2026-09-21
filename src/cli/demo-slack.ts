@@ -28,10 +28,20 @@ if (!userId) throw new Error("SLACK_BADER_USER_ID must be set in .env (your Slac
 
 console.log(`demo:slack  clock=${clock.label}  live=${process.env.ALLOW_LIVE === "1" ? "yes" : "NO (set ALLOW_LIVE=1 to send)"}`);
 const run = await runWeek({ config, clock, storage, alerter, outDir });
-storage.close();
 console.log(`fetched=${run.fetched} candidates=${run.candidates.length} drafts verified=${run.drafts.filter((d) => d.verified).length}/${run.drafts.length}`);
 
-const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set() };
+// Storage stays open: the Add an event form writes to it long after the weekly run finished.
+for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { storage.close(); process.exit(0); });
+
+const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set(), now: () => clock.now() };
+
+const manual = config.sources.find((s) => s.kind === "manual" && s.enabled);
+if (manual?.fallback_link) {
+  st.storage = storage;
+  st.manualSource = { ...manual, fallback_link: manual.fallback_link };
+} else {
+  console.log('events: no enabled "manual" source in config, so the Add an event button will not work');
+}
 
 const publisher = mailchimpFromEnv(process.env);
 if (publisher) {

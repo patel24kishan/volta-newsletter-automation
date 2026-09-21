@@ -44,3 +44,31 @@ export function localDateString(d: Date, timeZone: string): string {
   const { year, month, day } = partsInZone(d, timeZone);
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
+
+/**
+ * The inverse of partsInZone: wall-clock parts in a zone to a UTC instant, using Intl with a
+ * two-pass offset correction so a date on a daylight-saving boundary lands on the right hour.
+ */
+export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, timeZone: string): Date {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const offset1 = offsetMs(new Date(guess), timeZone);
+  const candidate = guess - offset1;
+  const offset2 = offsetMs(new Date(candidate), timeZone);
+  return new Date(guess - offset2);
+}
+
+export function isKnownTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function offsetMs(d: Date, timeZone: string): number {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p = Object.fromEntries(fmt.formatToParts(d).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
+  return asUtc - d.getTime();
+}

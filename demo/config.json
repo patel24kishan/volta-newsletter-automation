@@ -41,6 +41,14 @@
       "enabled": true
     },
     {
+      "id": "manual-events",
+      "kind": "manual",
+      "type": "event",
+      "url": "",
+      "fallback_link": "https://voltaeffect.com/events",
+      "enabled": true
+    },
+    {
       "id": "member-updates",
       "kind": "slack_channel",
       "type": "member_social",
