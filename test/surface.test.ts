@@ -133,11 +133,11 @@ describe("handlers", () => {
     expect(c.posts).toHaveLength(1); // one draft, and nothing held so no notes message
     const actions = (c.posts[0]!.blocks!.at(-1) as { elements: Array<{ action_id: string; value?: string }> }).elements;
     expect(actions.map((e) => e.action_id)).toEqual([ACTION.changeItems, ACTION.approve]);
-    expect(actions.at(-1)).toMatchObject({ action_id: ACTION.approve, value: "events-first" });
+    expect(actions.at(-1)).toMatchObject({ action_id: ACTION.approve, value: st.postedDraft!.key });
     expect(JSON.stringify(c.posts[0]!.blocks)).toContain("<https://www.eventbrite.ca/e/yoga|Event page>");
     expect(JSON.stringify(c.posts[0]!.blocks)).not.toContain("Volta story number");
 
-    const paths = await approveDraft(c, "D1", "events-first", st);
+    const paths = await approveDraft(c, "D1", st.postedDraft!.key, st);
     expect(paths).toBeDefined();
     expect(existsSync(paths!.html)).toBe(true);
     expect(readFileSync(paths!.md, "utf8")).toContain("**Yoga**");

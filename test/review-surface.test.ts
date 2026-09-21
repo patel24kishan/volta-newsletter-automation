@@ -157,7 +157,7 @@ describe("selecting a held item, end to end", () => {
       expect(body).toContain("Key insights");
     }
 
-    await approveDraft(slack, "D1", "events-first", st);
+    await approveDraft(slack, "D1", st.postedDraft!.key, st);
     expect(JSON.stringify(slack.posts.at(-1)!.blocks)).toContain(`This newsletter includes 1 item ${REVIEW_LABEL}`);
   });
 });

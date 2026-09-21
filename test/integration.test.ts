@@ -128,11 +128,12 @@ describe("end-to-end: fetch through Slack approval and send", () => {
     // The draft is read in Slack, and carries the buttons that act on it.
     const draftButtons = (slack.posts.at(-1)!.blocks!.at(-1) as { elements: Array<{ action_id: string; value?: string }> }).elements;
     expect(draftButtons.map((b) => b.action_id)).toEqual([ACTION.changeItems, ACTION.approve]);
-    expect(draftButtons.at(-1)!.value).toBe("events-first");
+    expect(draftButtons.at(-1)!.value).toBe(st.postedDraft!.key);
 
     // --- Decision two: approve, then send ---
     const chosen = drafts[0]!;
-    const paths = await approveDraft(slack, channel, chosen.id, st);
+    // The value the Approve button carried, exactly as Slack would send it back.
+    const paths = await approveDraft(slack, channel, draftButtons.at(-1)!.value!, st);
     expect(paths).toBeDefined();
     expect(existsSync(paths!.html)).toBe(true);
     expect(readFileSync(paths!.html, "utf8")).toBe(chosen.html);

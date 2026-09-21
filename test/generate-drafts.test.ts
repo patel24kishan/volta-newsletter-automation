@@ -82,21 +82,30 @@ describe("pressing Generate drafts", () => {
     expect(c.posts).toHaveLength(1);
     expect(actionsOf(c.posts[0]!.blocks!).map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.changeItems, ACTION.approve]);
     expect(JSON.stringify(c.posts[0]!.blocks)).toContain("built from 2 selected item(s)");
-    expect(st.postedDraft).toMatchObject({ draftId: "events-first", channel: "D1" });
+    expect(st.postedDraft).toMatchObject({ channel: "D1" });
+    // Approve carries this generation's own key, not the layout name every draft shares.
+    expect(actionsOf(c.posts[0]!.blocks!).at(-1)!.value).toBe(st.postedDraft!.key);
+    expect(st.postedDraft!.key).not.toBe("events-first");
   });
 
   it("retires the previous draft, so a stale one cannot be approved by scrolling up", async () => {
     const c = new FakeClient();
     const st = state();
-    await generateDrafts(c, "D1", [items[0]!.id], st, new MemoryAlerter());
+    await generateDrafts(c, "D1", [items[1]!.id], st, new MemoryAlerter());
     const firstTs = st.postedDraft!.ts!;
+    const firstSubject = st.drafts.get(st.postedDraft!.key)!.draft.subject;
 
     await generateDrafts(c, "D1", [items[0]!.id, items[1]!.id], st, new MemoryAlerter());
+    const secondSubject = st.drafts.get(st.postedDraft!.key)!.draft.subject;
 
     expect(c.updates).toHaveLength(1);
     expect(c.updates[0]!.ts).toBe(firstTs);
     expect(actionsOf(c.updates[0]!.blocks!)).toEqual([]); // its buttons are gone
     expect(JSON.stringify(c.updates[0]!.blocks)).toContain("A newer draft was generated below");
+    // Regression: the retired message once named the newer draft, since it was read after replacing.
+    expect(firstSubject).not.toBe(secondSubject);
+    expect(JSON.stringify(c.updates[0]!.blocks)).toContain(firstSubject);
+    expect(JSON.stringify(c.updates[0]!.blocks)).not.toContain(secondSubject);
     // The newest message is a complete draft, and it is the one Approve now acts on.
     expect(actionsOf(c.posts.at(-1)!.blocks!).at(-1)).toMatchObject({ action_id: ACTION.approve });
     expect(st.postedDraft!.ts).not.toBe(firstTs);
@@ -179,7 +188,7 @@ describe("approving the one draft", () => {
     const c = new FakeClient();
     const st = state();
     await generateDrafts(c, "D1", [items[0]!.id], st, new MemoryAlerter());
-    const paths = await approveDraft(c, "D1", "events-first", st);
+    const paths = await approveDraft(c, "D1", st.postedDraft!.key, st);
     expect(paths).toBeDefined();
     expect(c.posts.at(-1)!.text).toMatch(/Approved: Events first/);
   });

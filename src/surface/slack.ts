@@ -8,6 +8,7 @@ import { validateManualEvent } from "../manual-events.js";
 import { manualEventFromFields } from "../manual-events.js";
 import { ACTION, ADD_EVENT, addEventErrorBlocks, addEventFields, addEventView, selectedIdsFromState } from "./blocks.js";
 import { addManualEvent, approveDraft, changeItems, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
+import { serialQueue } from "./serial.js";
 
 export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter: Alerter): { app: App; client: SlackClient } {
   const botToken = env.SLACK_BOT_TOKEN;
@@ -39,6 +40,15 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
 
   const log = (msg: string) => console.log(`${new Date().toISOString()} slack: ${msg}`);
 
+  /**
+   * One click at a time. Without it, two quick presses of Approve both find the draft and create
+   * two campaigns, and two quick Generates both retire the same message and leave one draft still
+   * approvable. Only handlers that wait on Slack or Mailchimp between reading and changing state
+   * go through here: a selection change is synchronous, and opening the Add an event form must
+   * not queue, because Slack's trigger for it expires after three seconds.
+   */
+  const oneAtATime = serialQueue();
+
   app.action(ACTION.select, async ({ ack, body }) => {
     await ack();
     const b = body as { channel?: { id: string }; state?: unknown };
@@ -55,13 +65,15 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     const fromState = selectedIdsFromState(b.state);
     const ids = fromState.length ? fromState : st.selections.get(channel) ?? [];
     log(`Generate drafts pressed: ${ids.length} item(s) selected`);
-    try {
-      const good = await generateDrafts(client, channel, ids, st, alerter);
-      log(`posted ${good.length} verified draft(s)`);
-    } catch (e) {
-      alerter.alert("error", "slack", `generate failed: ${(e as Error).message}`, "check the logs");
-      await client.postMessage({ channel, text: `Could not generate drafts: ${(e as Error).message}` });
-    }
+    await oneAtATime(async () => {
+      try {
+        const good = await generateDrafts(client, channel, ids, st, alerter);
+        log(`posted ${good.length} verified draft(s)`);
+      } catch (e) {
+        alerter.alert("error", "slack", `generate failed: ${(e as Error).message}`, "check the logs");
+        await client.postMessage({ channel, text: `Could not generate drafts: ${(e as Error).message}` });
+      }
+    });
   });
 
   app.action(ACTION.addEvent, async ({ ack, body, client: bolt }) => {
@@ -97,40 +109,46 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
       return;
     }
     await ack();
-    try {
-      const { item } = await addManualEvent(client, fields, st);
-      log(item ? `event added: "${item.title}" (${item.date})` : "event not added: it failed a second check");
-    } catch (e) {
-      alerter.alert("error", "slack", `could not add the event: ${(e as Error).message}`, "check the logs");
-    }
+    await oneAtATime(async () => {
+      try {
+        const { item } = await addManualEvent(client, fields, st);
+        log(item ? `event added: "${item.title}" (${item.date})` : "event not added: it failed a second check");
+      } catch (e) {
+        alerter.alert("error", "slack", `could not add the event: ${(e as Error).message}`, "check the logs");
+      }
+    });
   });
 
   app.action(ACTION.approve, async ({ ack, body }) => {
     await ack();
     const b = body as { channel?: { id: string }; actions?: Array<{ value?: string }> };
     const channel = b.channel?.id;
-    const draftId = b.actions?.[0]?.value;
-    log(`Approve pressed: draft ${draftId ?? "?"}`);
-    if (!channel || !draftId) return;
-    try {
-      const paths = await approveDraft(client, channel, draftId, st);
-      log(paths ? `approved and written: ${paths.html}` : "approve failed: draft not found in this session");
-    } catch (e) {
-      alerter.alert("error", "slack", `approve failed: ${(e as Error).message}`, "check the logs");
-      await client.postMessage({ channel, text: `Could not approve: ${(e as Error).message}` });
-    }
+    const draftKey = b.actions?.[0]?.value;
+    log(`Approve pressed: draft ${draftKey ?? "?"}`);
+    if (!channel || !draftKey) return;
+    await oneAtATime(async () => {
+      try {
+        const paths = await approveDraft(client, channel, draftKey, st);
+        log(paths ? `approved and written: ${paths.html}` : "approve refused: that draft is not the current one");
+      } catch (e) {
+        alerter.alert("error", "slack", `approve failed: ${(e as Error).message}`, "check the logs");
+        await client.postMessage({ channel, text: `Could not approve: ${(e as Error).message}` });
+      }
+    });
   });
 
   app.action(ACTION.changeItems, async ({ ack, body }) => {
     await ack();
     log("Change the items pressed");
-    try {
-      await changeItems(client, st);
-    } catch (e) {
-      const channel = (body as { channel?: { id: string } }).channel?.id;
-      alerter.alert("error", "slack", `could not re-post the candidate list: ${(e as Error).message}`, "scroll up to the list instead");
-      if (channel) await client.postMessage({ channel, text: `Could not bring the list back: ${(e as Error).message}. Scroll up to the candidate list instead.` });
-    }
+    await oneAtATime(async () => {
+      try {
+        await changeItems(client, st);
+      } catch (e) {
+        const channel = (body as { channel?: { id: string } }).channel?.id;
+        alerter.alert("error", "slack", `could not re-post the candidate list: ${(e as Error).message}`, "scroll up to the list instead");
+        if (channel) await client.postMessage({ channel, text: `Could not bring the list back: ${(e as Error).message}. Scroll up to the candidate list instead.` });
+      }
+    });
   });
 
   // Link buttons still post interactions; acknowledge them so Bolt does not warn.
@@ -151,13 +169,15 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     const campaignId = b.actions?.[0]?.value;
     log(`Send pressed: campaign ${campaignId ?? "?"}`);
     if (!channel || !campaignId) return;
-    try {
-      const ok = await sendCampaign(client, channel, campaignId, st);
-      log(ok ? `campaign ${campaignId} sent` : "send refused");
-    } catch (e) {
-      alerter.alert("error", "email", `send failed: ${(e as Error).message}`, "open the campaign in the email platform and send from there");
-      await client.postMessage({ channel, text: `Could not send: ${(e as Error).message}` });
-    }
+    await oneAtATime(async () => {
+      try {
+        const ok = await sendCampaign(client, channel, campaignId, st);
+        log(ok ? `campaign ${campaignId} sent` : "send refused");
+      } catch (e) {
+        alerter.alert("error", "email", `send failed: ${(e as Error).message}`, "open the campaign in the email platform and send from there");
+        await client.postMessage({ channel, text: `Could not send: ${(e as Error).message}` });
+      }
+    });
   });
 
   return { app, client };

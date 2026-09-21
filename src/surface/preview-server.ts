@@ -16,8 +16,11 @@ import type { AddressInfo } from "node:net";
 export interface PreviewServer {
   /** Base URL links are built from, e.g. http://127.0.0.1:3111 or the host's public URL. */
   readonly baseUrl: string;
-  /** Publish HTML and return the URL to open. Each call gets its own unguessable address. */
-  put(html: string): string;
+  /**
+   * Publish HTML and return the URL to open. Each call gets its own unguessable address unless
+   * `id` is given, which is how a page is served again at the same address after a restart.
+   */
+  put(html: string, id?: string): string;
   close(): Promise<void>;
 }
 
@@ -87,8 +90,9 @@ export async function startPreviewServer(opts: PreviewOptions = {}): Promise<Pre
 
   return {
     baseUrl,
-    put(html) {
-      const id = randomUUID();
+    put(html, given) {
+      // A given id must still be one this server would accept, so it cannot widen what is served.
+      const id = given && /^[A-Za-z0-9-]{1,64}$/.test(given) ? given : randomUUID();
       pages.set(id, { html, at: now() });
       for (const [key, page] of pages) {
         if (now() - page.at > ttl) pages.delete(key);

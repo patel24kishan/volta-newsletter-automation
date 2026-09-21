@@ -100,7 +100,7 @@ describe("Approve and Send with a publisher", () => {
   afterEach(() => { rmSync(outDir, { recursive: true, force: true }); });
 
   function state(pub?: Publisher, env: NodeJS.ProcessEnv = { ALLOW_LIVE: "1" }): SurfaceState {
-    const st: SurfaceState = { candidates: [], timeZone: "America/Halifax", outDir, drafts: new Map([[draft.id, draft]]), selections: new Map(), env, campaigns: new Set() };
+    const st: SurfaceState = { candidates: [], timeZone: "America/Halifax", outDir, drafts: new Map([[draft.id, { key: draft.id, draft, items: [] }]]), selections: new Map(), env, campaigns: new Set() };
     if (pub) { st.publisher = pub; st.audience = { audienceName: "Test list", memberCount: 1 }; }
     return st;
   }

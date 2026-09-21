@@ -230,7 +230,7 @@ export function addEventErrorBlocks(errors: ManualEventErrors): Record<string, s
  * The newsletter as Slack can show it, with the three things that can be done to it: read the real
  * rendering, change what is in it, or approve it. Read, fix, commit, in that order.
  */
-export function draftBlocks(d: Draft, opts: { itemCount: number; previewUrl?: string } = { itemCount: 0 }): Block[] {
+export function draftBlocks(d: Draft, opts: { itemCount: number; previewUrl?: string; key?: string } = { itemCount: 0 }): Block[] {
   const blocks: Block[] = [
     { type: "header", text: { type: "plain_text", text: `This week's newsletter: ${d.name}`, emoji: false } },
     { type: "context", elements: [{ type: "mrkdwn", text: `Subject: ${escapeMrkdwn(d.subject)} · built from ${opts.itemCount || d.item_ids.length} selected item(s) · verified: ${d.verification.ok ? "yes" : "NO"}` }] },
@@ -239,7 +239,9 @@ export function draftBlocks(d: Draft, opts: { itemCount: number; previewUrl?: st
   const elements: Block[] = [];
   if (opts.previewUrl) elements.push({ type: "button", action_id: ACTION.preview, text: { type: "plain_text", text: "Preview in browser", emoji: false }, url: opts.previewUrl });
   elements.push({ type: "button", action_id: ACTION.changeItems, text: { type: "plain_text", text: "Change the items", emoji: false }, value: "change_items" });
-  elements.push({ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: "Approve", emoji: false }, value: d.id });
+  // The key is new for every generation. The layout name would be the same each time, so an
+  // Approve left on an older message would approve whichever draft was newest.
+  elements.push({ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: "Approve", emoji: false }, value: opts.key ?? d.id });
   blocks.push({ type: "actions", block_id: `approve_${d.id}`, elements });
   return blocks;
 }

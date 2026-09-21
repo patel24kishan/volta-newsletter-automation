@@ -21,7 +21,25 @@ export interface Storage {
   addManualEvent(input: NewManualEvent): ManualEvent;
   /** Hand-added events starting within [fromIso, toIso], earliest first. */
   listManualEvents(fromIso: string, toIso: string): ManualEvent[];
+  /** The week's Slack session as saved, raw; session.ts owns its shape and checks it. */
+  loadSession(week: string): string | undefined;
+  saveSession(week: string, state: string): void;
+  /** A campaign Approve created. Recording it twice is harmless. */
+  recordCampaign(id: string, draftKey: string): void;
+  markCampaignSent(id: string): void;
+  listCampaigns(): CampaignRecord[];
   close(): void;
+}
+
+/**
+ * Deliberately not tied to a week: a campaign approved on a Friday is still sendable after a
+ * Monday restart, and one already sent can never be sent again from Slack.
+ */
+export interface CampaignRecord {
+  id: string;
+  draft_key: string;
+  created_at: string;
+  sent_at: string | null;
 }
 
 export class StorageError extends Error {}
@@ -62,6 +80,17 @@ export class SqliteStorage implements Storage {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS manual_events_start ON manual_events(starts_at);
+      CREATE TABLE IF NOT EXISTS slack_sessions (
+        week TEXT PRIMARY KEY,
+        state TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id TEXT PRIMARY KEY,
+        draft_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        sent_at TEXT
+      );
     `);
     this.migrate();
   }
@@ -159,6 +188,31 @@ export class SqliteStorage implements Storage {
     return this.db
       .prepare("SELECT id, title, starts_at, location, description, link, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
       .all(from, to) as unknown as ManualEvent[];
+  }
+
+  loadSession(week: string): string | undefined {
+    const row = this.db.prepare("SELECT state FROM slack_sessions WHERE week = ?").get(week) as { state: string } | undefined;
+    return row?.state;
+  }
+
+  saveSession(week: string, state: string): void {
+    this.db
+      .prepare("INSERT INTO slack_sessions (week, state, updated_at) VALUES (?, ?, ?) ON CONFLICT(week) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at")
+      .run(week, state, new Date().toISOString());
+  }
+
+  recordCampaign(id: string, draftKey: string): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO campaigns (id, draft_key, created_at, sent_at) VALUES (?, ?, ?, NULL)")
+      .run(id, draftKey, new Date().toISOString());
+  }
+
+  markCampaignSent(id: string): void {
+    this.db.prepare("UPDATE campaigns SET sent_at = ? WHERE id = ? AND sent_at IS NULL").run(new Date().toISOString(), id);
+  }
+
+  listCampaigns(): CampaignRecord[] {
+    return this.db.prepare("SELECT id, draft_key, created_at, sent_at FROM campaigns ORDER BY created_at ASC").all() as unknown as CampaignRecord[];
   }
 
   close(): void {
