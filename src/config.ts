@@ -27,8 +27,14 @@ export interface SourceConfig {
   channel_id?: string;
 }
 
+/** The layouts a draft can be built in. One is chosen per newsletter; see DRAFT_LAYOUTS. */
+export type DraftLayout = "brief" | "standard" | "events-first";
+export const DRAFT_LAYOUTS: DraftLayout[] = ["brief", "standard", "events-first"];
+
 export interface Config {
   timezone: string;
+  /** Which layout the newsletter is built in. Changing it needs no deploy. */
+  draft_layout: DraftLayout;
   /** Day the newsletter goes out, e.g. "monday". Shifts by the holiday rule. */
   send_day: string;
   /** Local time the reminder must be delivered by, "HH:MM". */
@@ -91,6 +97,9 @@ export function validateConfig(value: unknown, where = "config"): Config {
 
   if (typeof c.reminder_time === "string" && !/^\d{2}:\d{2}$/.test(c.reminder_time)) {
     errors.push("reminder_time must be HH:MM");
+  }
+  if (!DRAFT_LAYOUTS.includes(c.draft_layout as DraftLayout)) {
+    errors.push(`draft_layout must be one of ${DRAFT_LAYOUTS.join(", ")}`);
   }
   if (Array.isArray(c.holiday_overrides)) {
     for (const d of c.holiday_overrides as unknown[]) {

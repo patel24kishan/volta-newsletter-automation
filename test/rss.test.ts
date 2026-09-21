@@ -10,6 +10,7 @@ const source: SourceConfig = { id: "google-news", kind: "rss", type: "news", url
 function cfg(overrides: Partial<Config> = {}): Config {
   return {
     timezone: "America/Halifax",
+    draft_layout: "events-first",
     send_day: "monday",
     reminder_time: "08:30",
     content_window_days: 7,

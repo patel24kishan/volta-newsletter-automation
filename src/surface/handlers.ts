@@ -14,7 +14,7 @@ import { assertLive } from "../runtime.js";
 import type { Item } from "../schema.js";
 import type { Storage } from "../storage.js";
 import type { Publisher } from "../publish/types.js";
-import { approvedBlocks, draftBlocks, draftNotesBlocks, reminderBlocks, sentBlocks, type ReminderInput } from "./blocks.js";
+import { approvedBlocks, draftBlocks, draftNotesBlocks, reminderBlocks, sentBlocks, supersededDraftBlocks, type ReminderInput } from "./blocks.js";
 
 export interface SlackClient {
   postMessage(args: { channel: string; text: string; blocks?: unknown[]; thread_ts?: string }): Promise<{ ts?: string; channel?: string }>;
@@ -46,6 +46,12 @@ export interface SurfaceState {
   manualSource?: SourceConfig & { fallback_link: string };
   /** The run's clock, so re-ranking after an addition matches the ranking already shown. */
   now?: () => Date;
+  /** Which layout the newsletter is built in, from config. */
+  layout?: Draft["id"];
+  /** The draft message as posted, so a rebuild can retire it. */
+  postedDraft?: { draftId: string; channel: string; ts?: string };
+  /** Serves the rendered email. Undefined means no "Preview in browser" button is offered. */
+  preview?: { put(html: string): string };
 }
 
 export async function sendReminder(client: SlackClient, userId: string, input: ReminderInput, st: SurfaceState): Promise<{ channel: string; ts?: string }> {
@@ -112,27 +118,69 @@ export async function generateDrafts(client: SlackClient, channel: string, selec
     await client.postMessage({ channel, text: "Nothing is selected. Tick at least one item, then press Generate drafts again.", ...(threadTs ? { thread_ts: threadTs } : {}) });
     return [];
   }
-  const drafts = buildDrafts(selected, { timeZone: st.timeZone });
+  const drafts = buildDrafts(selected, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"] });
   const good = drafts.filter((d) => d.verification.ok);
   for (const d of drafts.filter((d) => !d.verification.ok)) {
     alerter.alert("error", `draft:${d.id}`, `withheld: ${d.verification.violations.map((v) => `${v.kind} "${v.value}"`).join(", ")}`, "inspect the items; the draft was not shown");
   }
   st.drafts.clear();
   for (const d of good) st.drafts.set(d.id, d);
-  // The drafts leave out review labels and notes to the editor, so they are said here instead.
-  const lead = `${good.length} draft(s) from ${selected.length} selected item(s).`;
+
+  // The newsletter carries no review labels or notes to the editor, so they are said here instead.
   const notes = draftNotesBlocks(selected);
-  await client.postMessage({
-    channel, text: lead,
-    ...(notes.length ? { blocks: [{ type: "section", text: { type: "mrkdwn", text: lead } }, ...notes] } : {}),
+  if (notes.length) {
+    await client.postMessage({
+      channel, text: "Before you read the draft, two things about the items you picked.",
+      blocks: notes, ...(threadTs ? { thread_ts: threadTs } : {}),
+    });
+  }
+
+  if (good.length === 0) {
+    await client.postMessage({ channel, text: "No draft passed verification. A maintainer has been alerted.", ...(threadTs ? { thread_ts: threadTs } : {}) });
+    return [];
+  }
+
+  // A draft built from an older selection must stop being approvable the moment a newer one exists.
+  await supersedePreviousDraft(client, st);
+
+  const d = good[0]!;
+  const previewUrl = st.preview?.put(d.html);
+  const res = await client.postMessage({
+    channel, text: `This week's newsletter: ${d.name} — ${d.subject}`,
+    blocks: draftBlocks(d, { itemCount: selected.length, ...(previewUrl ? { previewUrl } : {}) }),
     ...(threadTs ? { thread_ts: threadTs } : {}),
   });
-  for (let i = 0; i < good.length; i++) {
-    const d = good[i]!;
-    await client.postMessage({ channel, text: `Draft ${i + 1} of ${good.length}: ${d.name} — ${d.subject}`, blocks: draftBlocks(d, i, good.length), ...(threadTs ? { thread_ts: threadTs } : {}) });
-  }
-  if (good.length === 0) await client.postMessage({ channel, text: "No draft passed verification. A maintainer has been alerted.", ...(threadTs ? { thread_ts: threadTs } : {}) });
+  st.postedDraft = { draftId: d.id, channel, ...(res.ts ? { ts: res.ts } : {}) };
   return good;
+}
+
+async function supersedePreviousDraft(client: SlackClient, st: SurfaceState): Promise<void> {
+  const posted = st.postedDraft;
+  const previous = posted && st.drafts.get(posted.draftId);
+  if (!posted?.ts || !client.updateMessage) return;
+  try {
+    await client.updateMessage({
+      channel: posted.channel, ts: posted.ts,
+      text: "An earlier draft, replaced by a newer one.",
+      blocks: previous ? supersededDraftBlocks(previous) : [{ type: "context", elements: [{ type: "mrkdwn", text: "A newer draft was generated below. This one can no longer be approved." }] }],
+    });
+  } catch { /* an older process posted it; leaving it alone is better than failing the rebuild */ }
+}
+
+/**
+ * Bring the candidate list back to the bottom of the conversation so the selection can be fixed
+ * without scrolling for it, with everything currently ticked still ticked. Adding a forgotten
+ * event is the same list's Add an event button, so nothing else is needed here.
+ */
+export async function changeItems(client: SlackClient, st: SurfaceState): Promise<void> {
+  assertLive("re-post the candidate list", st.env);
+  const r = st.reminder;
+  if (!r) throw new Error("the candidate list is not available in this session");
+  const ticked = st.selections.get(r.channel) ?? r.input.preselectedIds;
+  const input: ReminderInput = { ...r.input, candidates: st.candidates, preselectedIds: ticked };
+  const res = await client.postMessage({ channel: r.channel, text: reminderText(input.candidates.length), blocks: reminderBlocks(input) });
+  // The freshest list becomes the one an added event updates.
+  st.reminder = { input, channel: r.channel, ...(res.ts ? { ts: res.ts } : {}) };
 }
 
 export async function approveDraft(client: SlackClient, channel: string, draftId: string, st: SurfaceState, threadTs?: string): Promise<{ html: string; md: string } | undefined> {

@@ -24,6 +24,8 @@ export interface DraftOptions {
   timeZone: string;
   /** Optional closing line, e.g. an AI-assisted disclosure decided by Volta. */
   footer?: string;
+  /** Which layouts to build. Defaults to all three; the newsletter itself builds only one. */
+  layouts?: Draft["id"][];
 }
 
 const T = {
@@ -63,11 +65,13 @@ type Block =
 
 export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   const groups = groupItems(items);
-  const layouts: Array<{ id: Draft["id"]; name: string; blocks: Block[] }> = [
+  const wanted = opts.layouts;
+  const all: Array<{ id: Draft["id"]; name: string; blocks: Block[] }> = [
     { id: "brief", name: T.brief, blocks: briefBlocks(groups, opts) },
     { id: "standard", name: T.standard, blocks: standardBlocks(groups, opts) },
     { id: "events-first", name: T.eventsFirst, blocks: eventsFirstBlocks(groups, opts) },
   ];
+  const layouts = wanted ? all.filter((l) => wanted.includes(l.id)) : all;
   const subject = subjectLine(items);
   return layouts.map(({ id, name, blocks }) => {
     const all: Block[] = [{ kind: "h1", text: subject }, ...blocks];

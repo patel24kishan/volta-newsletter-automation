@@ -7,7 +7,7 @@ import type { Alerter } from "../alerts.js";
 import { validateManualEvent } from "../manual-events.js";
 import { manualEventFromFields } from "../manual-events.js";
 import { ACTION, ADD_EVENT, addEventErrorBlocks, addEventFields, addEventView, selectedIdsFromState } from "./blocks.js";
-import { addManualEvent, approveDraft, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
+import { addManualEvent, approveDraft, changeItems, generateDrafts, rememberSelection, sendCampaign, type SlackClient, type SurfaceState } from "./handlers.js";
 
 export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter: Alerter): { app: App; client: SlackClient } {
   const botToken = env.SLACK_BOT_TOKEN;
@@ -121,10 +121,27 @@ export function createSlackApp(env: NodeJS.ProcessEnv, st: SurfaceState, alerter
     }
   });
 
-  // The link button still posts an interaction; acknowledge it so Bolt does not warn.
+  app.action(ACTION.changeItems, async ({ ack, body }) => {
+    await ack();
+    log("Change the items pressed");
+    try {
+      await changeItems(client, st);
+    } catch (e) {
+      const channel = (body as { channel?: { id: string } }).channel?.id;
+      alerter.alert("error", "slack", `could not re-post the candidate list: ${(e as Error).message}`, "scroll up to the list instead");
+      if (channel) await client.postMessage({ channel, text: `Could not bring the list back: ${(e as Error).message}. Scroll up to the candidate list instead.` });
+    }
+  });
+
+  // Link buttons still post interactions; acknowledge them so Bolt does not warn.
   app.action(ACTION.edit, async ({ ack }) => {
     await ack();
     log("Edit in email platform opened");
+  });
+
+  app.action(ACTION.preview, async ({ ack }) => {
+    await ack();
+    log("Preview opened in browser");
   });
 
   app.action(ACTION.send, async ({ ack, body }) => {

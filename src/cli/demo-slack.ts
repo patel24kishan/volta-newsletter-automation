@@ -14,6 +14,7 @@ import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
 import { SqliteStorage } from "../storage.js";
 import { sendReminder, type SurfaceState } from "../surface/handlers.js";
+import { startPreviewServer } from "../surface/preview-server.js";
 import { createSlackApp } from "../surface/slack.js";
 
 loadDotEnv();
@@ -33,7 +34,17 @@ console.log(`fetched=${run.fetched} candidates=${run.candidates.length} drafts v
 // Storage stays open: the Add an event form writes to it long after the weekly run finished.
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { storage.close(); process.exit(0); });
 
-const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set(), now: () => clock.now() };
+const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set(), now: () => clock.now(), layout: config.draft_layout };
+
+// Serves the rendered email so Slack can link to the real thing, not Slack's approximation of it.
+try {
+  const preview = await startPreviewServer();
+  st.preview = preview;
+  console.log(`preview: serving the rendered newsletter at ${preview.baseUrl}${process.env.PUBLIC_URL ? "" : " (this machine only)"}`);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { void preview.close(); });
+} catch (e) {
+  console.log(`preview: not available (${(e as Error).message}); Slack will show the draft without a preview button`);
+}
 
 const manual = config.sources.find((s) => s.kind === "manual" && s.enabled);
 if (manual?.fallback_link) {

@@ -22,7 +22,7 @@ import { verifyDraft } from "../src/pipeline/verify.js";
 import { MERGE_TAGS, TEMPLATE_PHRASES } from "../src/draft/templates.js";
 
 const config: Config = {
-  timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+  timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
   watchlist: ["Volta"], holiday_overrides: ["2026-10-12"], alert_recipients: ["bader"],
   sources: [
     { id: "google-news", kind: "rss", type: "news", url: "https://news.test/rss", enabled: true },
@@ -122,17 +122,16 @@ describe("end-to-end: fetch through Slack approval and send", () => {
     expect(fromSlackPayload).toEqual(ticked);
 
     const drafts = await generateDrafts(slack, channel, fromSlackPayload, st, alerter);
-    expect(drafts.map((d) => d.id)).toEqual(["brief", "standard", "events-first"]);
+    expect(drafts.map((d) => d.id)).toEqual(["events-first"]); // one newsletter, the configured layout
     expect(alerter.sent).toEqual([]); // nothing was withheld
 
-    // Drafts are read in Slack: each has its own Approve button, and nothing points at a local server.
-    for (const d of drafts) {
-      expect(slack.buttons().some((b) => b.action_id === ACTION.approve && b.value === d.id), d.id).toBe(true);
-    }
-    expect(JSON.stringify(slack.posts)).not.toContain("127.0.0.1");
+    // The draft is read in Slack, and carries the buttons that act on it.
+    const draftButtons = (slack.posts.at(-1)!.blocks!.at(-1) as { elements: Array<{ action_id: string; value?: string }> }).elements;
+    expect(draftButtons.map((b) => b.action_id)).toEqual([ACTION.changeItems, ACTION.approve]);
+    expect(draftButtons.at(-1)!.value).toBe("events-first");
 
     // --- Decision two: approve, then send ---
-    const chosen = drafts[1]!; // Standard
+    const chosen = drafts[0]!;
     const paths = await approveDraft(slack, channel, chosen.id, st);
     expect(paths).toBeDefined();
     expect(existsSync(paths!.html)).toBe(true);
@@ -176,7 +175,7 @@ describe("end-to-end: fetch through Slack approval and send", () => {
     // The other two sources still produced a verified newsletter.
     expect(run.after_dedupe).toBeGreaterThan(0);
     expect(run.drafts.every((d) => d.verified)).toBe(true);
-    expect(readFileSync(run.drafts[1]!.file_md, "utf8")).toContain("No in the news items this week.");
+    expect(readFileSync(run.drafts[0]!.file_md, "utf8")).toContain("No in the news items this week.");
   });
 
   it("dry-run reaches nobody: no Slack message, no campaign, no send", async () => {
@@ -197,8 +196,8 @@ describe("end-to-end: fetch through Slack approval and send", () => {
     expect(slack.posts).toEqual([]);
     expect(mailchimp.campaigns.size).toBe(0);
     expect(mailchimp.sent).toEqual([]);
-    // The drafts still exist on disk: dry-run gathers and drafts, it just never reaches a human.
-    expect(existsSync(join(outDir, "drafts", "standard.html"))).toBe(true);
+    // The draft still exists on disk: dry-run gathers and drafts, it just never reaches a human.
+    expect(existsSync(join(outDir, "drafts", `${config.draft_layout}.html`))).toBe(true);
   });
 
   it("the same week run twice is idempotent: no duplicate stored items", async () => {

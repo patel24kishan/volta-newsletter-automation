@@ -8,7 +8,7 @@ import { isKnownTimeZone, zonedToUtc } from "../clock.js";
 import type { SourceConfig } from "../config.js";
 import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
-import { collapseWhitespace, firstSentences } from "../text.js";
+import { collapseWhitespace, firstSentences, stripHtml } from "../text.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 export interface IcsProperty {
@@ -79,8 +79,11 @@ export class IcsFetcher implements Fetcher {
         }
       }
 
-      const description = collapseWhitespace(ev.DESCRIPTION?.value ?? "");
-      const location = collapseWhitespace(ev.LOCATION?.value ?? "");
+      // Calendar descriptions often carry HTML (Eventbrite writes <p> and <strong>). Left in, the
+      // tags would be printed to subscribers verbatim, and the verifier would read two paragraphs
+      // as one run-on phrase that appears nowhere in the source and refuse the draft.
+      const description = stripHtml(ev.DESCRIPTION?.value ?? "");
+      const location = stripHtml(ev.LOCATION?.value ?? "");
       const summary = firstSentences(description, 2, 280);
       const item: Item = {
         id: itemId(source.id, `${uid}@${link}`),

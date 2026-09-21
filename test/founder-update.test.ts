@@ -135,7 +135,7 @@ describe("splitEditorial", () => {
 
 const source: SourceConfig = { id: "member-updates", kind: "slack_channel", type: "member_social", url: "", enabled: true, channel_id: "C0C2H7WAUJX" };
 const config: Config = {
-  timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+  timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
   watchlist: ["Volta"], holiday_overrides: [], alert_recipients: [], sources: [source],
 };
 const clock = resolveClock(["--now=2026-09-17T23:00:00Z"], {});

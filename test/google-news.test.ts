@@ -40,7 +40,7 @@ describe("googleNewsUrl", () => {
 
 describe("google_news source config", () => {
   const base = {
-    timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30",
+    timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30",
     content_window_days: 7, events_window_days: 14, watchlist: ["Volta"],
     holiday_overrides: [], alert_recipients: ["bader"],
   };

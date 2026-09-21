@@ -9,7 +9,7 @@ import { runWeek } from "../src/run-week.js";
 import { SqliteStorage } from "../src/storage.js";
 
 const config: Config = {
-  timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+  timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
   watchlist: ["Volta"], holiday_overrides: ["2026-10-12"], alert_recipients: ["bader"],
   sources: [
     { id: "google-news", kind: "rss", type: "news", url: "https://news.test/rss", enabled: true },
@@ -70,7 +70,7 @@ describe("runWeek", () => {
     expect(s.sources.map((x) => `${x.id}:${x.status}`)).toEqual(["google-news:empty", "volta-calendar:ok", "volta-linkedin:failed"]);
     expect(alerter.sent.map((a) => `${a.level}:${a.source}`)).toEqual(["warning:google-news", "error:volta-linkedin"]);
     expect(alerter.sent[1]!.message).toMatch(/HTTP 503/);
-    expect(readFileSync(s.drafts[1]!.file_md, "utf8")).toContain("No in the news items this week.");
+    expect(readFileSync(s.drafts[0]!.file_md, "utf8")).toContain("No in the news items this week.");
   });
 
   it("reports the Thanksgiving shift and a due reminder when run as Tuesday 08:30 after the holiday", async () => {

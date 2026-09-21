@@ -16,8 +16,10 @@ export const ACTION = {
   approve: "newsletter_approve",
   send: "newsletter_send",
   addEvent: "newsletter_add_event",
-  /** A link button: Slack still posts an interaction for it, so it needs an id to acknowledge. */
+  changeItems: "newsletter_change_items",
+  /** Link buttons: Slack still posts an interaction for these, so they need ids to acknowledge. */
   edit: "newsletter_edit",
+  preview: "newsletter_preview",
 } as const;
 
 /** The form for an event no source lists yet. Its blocks are keyed so errors land on the field. */
@@ -224,15 +226,33 @@ export function addEventErrorBlocks(errors: ManualEventErrors): Record<string, s
   return out;
 }
 
-export function draftBlocks(d: Draft, index: number, total: number): Block[] {
+/**
+ * The newsletter as Slack can show it, with the three things that can be done to it: read the real
+ * rendering, change what is in it, or approve it. Read, fix, commit, in that order.
+ */
+export function draftBlocks(d: Draft, opts: { itemCount: number; previewUrl?: string } = { itemCount: 0 }): Block[] {
   const blocks: Block[] = [
-    { type: "header", text: { type: "plain_text", text: `Draft ${index + 1} of ${total}: ${d.name}`, emoji: false } },
-    { type: "context", elements: [{ type: "mrkdwn", text: `Subject: ${escapeMrkdwn(d.subject)} · ${d.item_ids.length} item(s) · verified: ${d.verification.ok ? "yes" : "NO"}` }] },
+    { type: "header", text: { type: "plain_text", text: `This week's newsletter: ${d.name}`, emoji: false } },
+    { type: "context", elements: [{ type: "mrkdwn", text: `Subject: ${escapeMrkdwn(d.subject)} · built from ${opts.itemCount || d.item_ids.length} selected item(s) · verified: ${d.verification.ok ? "yes" : "NO"}` }] },
   ];
   for (const chunk of chunkMrkdwn(markdownToMrkdwn(d.markdown))) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
-  const elements: Block[] = [{ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: `Approve draft ${index + 1}`, emoji: false }, value: d.id }];
+  const elements: Block[] = [];
+  if (opts.previewUrl) elements.push({ type: "button", action_id: ACTION.preview, text: { type: "plain_text", text: "Preview in browser", emoji: false }, url: opts.previewUrl });
+  elements.push({ type: "button", action_id: ACTION.changeItems, text: { type: "plain_text", text: "Change the items", emoji: false }, value: "change_items" });
+  elements.push({ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: "Approve", emoji: false }, value: d.id });
   blocks.push({ type: "actions", block_id: `approve_${d.id}`, elements });
   return blocks;
+}
+
+/**
+ * What an older draft becomes once a newer one exists. Its buttons go, so a draft that no longer
+ * reflects the current selection cannot be approved by scrolling up to it.
+ */
+export function supersededDraftBlocks(d: Draft): Block[] {
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `~*This week's newsletter: ${escapeMrkdwn(d.name)}*~\nSubject: ${escapeMrkdwn(d.subject)}` } },
+    { type: "context", elements: [{ type: "mrkdwn", text: "A newer draft was generated below. This one can no longer be approved." }] },
+  ];
 }
 
 export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, held: Item[] = []): Block[] {

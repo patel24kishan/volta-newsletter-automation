@@ -145,11 +145,11 @@ describe("selecting a held item, end to end", () => {
     const st: SurfaceState = { candidates: rankItems([held, clear], now), timeZone: TZ, outDir, drafts: new Map(), selections: new Map(), env: { ALLOW_LIVE: "1" }, campaigns: new Set() };
 
     const drafts = await generateDrafts(slack, "D1", [held.id, clear.id], st, new MemoryAlerter());
-    expect(drafts).toHaveLength(3);
+    expect(drafts).toHaveLength(1);
 
-    // First message: the count, the held warning, and the notes.
+    // First message: the held warning and the notes to the editor.
     expect(JSON.stringify(slack.posts[0]!.blocks)).toContain(`1 selected item is ${REVIEW_LABEL}`);
-    // The drafts themselves, as posted to Slack, carry no label and no notes.
+    // The draft itself, as posted to Slack, carries no label and no notes.
     for (const post of slack.posts.slice(1)) {
       const body = JSON.stringify(post.blocks);
       expect(body).not.toContain(REVIEW_LABEL);
@@ -157,7 +157,7 @@ describe("selecting a held item, end to end", () => {
       expect(body).toContain("Key insights");
     }
 
-    await approveDraft(slack, "D1", "standard", st);
+    await approveDraft(slack, "D1", "events-first", st);
     expect(JSON.stringify(slack.posts.at(-1)!.blocks)).toContain(`This newsletter includes 1 item ${REVIEW_LABEL}`);
   });
 });

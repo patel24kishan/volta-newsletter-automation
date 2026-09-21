@@ -11,7 +11,7 @@ const source: SourceConfig = { id: "volta-linkedin", kind: "linkedin_company", t
 
 function cfg(overrides: Partial<Config> = {}): Config {
   return {
-    timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+    timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
     watchlist: ["Volta"], holiday_overrides: [], alert_recipients: [], sources: [source], ...overrides,
   };
 }

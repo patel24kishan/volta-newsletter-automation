@@ -35,6 +35,7 @@ describe("demo/config.json", () => {
 describe("validateConfig", () => {
   const base = {
     timezone: "America/Halifax",
+    draft_layout: "events-first",
     send_day: "monday",
     reminder_time: "08:30",
     content_window_days: 7,

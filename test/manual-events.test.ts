@@ -144,7 +144,7 @@ describe("the manual events fetcher", () => {
 });
 
 describe("config for the manual source", () => {
-  const base = { timezone: TZ, send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14, watchlist: ["Volta"], holiday_overrides: [], alert_recipients: ["bader"] };
+  const base = { timezone: TZ, draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14, watchlist: ["Volta"], holiday_overrides: [], alert_recipients: ["bader"] };
 
   it("requires a fallback page and needs no feed URL", () => {
     const good = validateConfig({ ...base, sources: [{ id: "manual-events", kind: "manual", type: "event", url: "", fallback_link: "https://voltaeffect.com/events", enabled: true }] });

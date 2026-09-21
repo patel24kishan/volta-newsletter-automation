@@ -107,7 +107,7 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   // the week. Only a person can put it in. Ranking alone would not guarantee that.
   const n = o.preselect ?? 10;
   const preselected = candidates.filter((c) => !c.item.requires_review).slice(0, n).map((c) => c.item);
-  const drafts = buildDrafts(preselected, { timeZone: config.timezone });
+  const drafts = buildDrafts(preselected, { timeZone: config.timezone, layouts: [config.draft_layout] });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {
     const md = join(o.outDir, "drafts", `${d.id}.md`);

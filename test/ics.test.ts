@@ -11,7 +11,7 @@ const source: SourceConfig = { id: "volta-calendar", kind: "ics", type: "event",
 
 function cfg(overrides: Partial<Config> = {}): Config {
   return {
-    timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+    timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
     watchlist: ["Volta"], holiday_overrides: [], alert_recipients: [], sources: [source], ...overrides,
   };
 }
@@ -132,6 +132,24 @@ describe("IcsFetcher on synthetic calendars", () => {
     const r2 = await fetcher.fetch(noFallback, { config: cfg(), clock, fetchText: async () => body });
     expect(r2.items).toHaveLength(0);
     expect(r2.warnings.join()).toMatch(/no fallback_link/);
+  });
+
+  it("strips the HTML calendars write, so tags never reach a subscriber or split a phrase", async () => {
+    // The real shape from Volta's feed: Eventbrite writes paragraphs, and the two sentences run
+    // together once the tags go, so the verifier only accepts the draft if the item's own text
+    // reads the same way. A literal <p> in a newsletter would be a visible defect either way.
+    const desc = "<p>Scott Pettie: A Practitioner's Guide to Risk Assessment That Actually Works</p><p><strong>DEFCON Halifax &#8211; October Meet-Up</strong></p>";
+    const body = cal(ev({ uid: "h", summary: "DEFCON Halifax", start: "20260920T210000Z", url: "https://x.test/h", desc, loc: "<p>Volta</p>" }));
+    const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
+    const item = r.items[0]!;
+    for (const field of [item.summary, item.raw_excerpt, item.location ?? ""]) {
+      expect(field).not.toMatch(/<[a-z/]/i);
+      expect(field).not.toContain("&#8211;");
+    }
+    expect(item.location).toBe("Volta");
+    expect(item.summary).toContain("Risk Assessment That Actually Works DEFCON Halifax – October Meet-Up");
+    // What the draft would say about this event is present in the text it was taken from.
+    expect(item.raw_excerpt).toContain(item.summary);
   });
 
   it("flags needs_summary when the event has no description", async () => {

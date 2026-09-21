@@ -145,20 +145,23 @@ describe("Approve and Send with a publisher", () => {
     expect(blocks.length).toBeLessThan(10);
   });
 
-  it("each generated draft offers only Approve, since previews live in the email platform", async () => {
+  it("offers a browser preview only when a preview server is running", async () => {
     const c = new FakeClient();
     const st: SurfaceState = { ...state(), candidates: [], drafts: new Map() };
     st.candidates = [{ item: sampleItem({ type: "event", link: "https://e/1", title: "Yoga", raw_excerpt: "Yoga session." }), score: 1, reasons: [] }];
 
     await generateDrafts(c, "D1", [st.candidates[0]!.item.id], st, new MemoryAlerter());
+    const withoutServer = (c.posts.at(-1)!.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string }> };
+    expect(withoutServer.elements.map((e) => e.action_id)).toEqual([ACTION.changeItems, ACTION.approve]);
 
-    const draftMessages = c.posts.slice(1);
-    expect(draftMessages).toHaveLength(3);
-    for (const m of draftMessages) {
-      const actions = (m.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string; url?: string }> };
-      expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.approve]);
-      expect(JSON.stringify(m.blocks)).not.toContain("127.0.0.1");
-    }
+    const served: string[] = [];
+    st.preview = { put: (html) => { served.push(html); return "https://preview.test/preview/abc"; } };
+    await generateDrafts(c, "D1", [st.candidates[0]!.item.id], st, new MemoryAlerter());
+    const withServer = (c.posts.at(-1)!.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string; url?: string }> };
+    expect(withServer.elements.map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.changeItems, ACTION.approve]);
+    expect(withServer.elements[0]!.url).toBe("https://preview.test/preview/abc");
+    // The real rendered email is what gets served, not a markdown approximation of it.
+    expect(served[0]).toContain("<!DOCTYPE html>");
   });
 
   it("without a publisher, Approve says so and stops at the file", async () => {

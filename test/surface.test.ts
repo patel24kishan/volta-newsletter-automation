@@ -123,24 +123,25 @@ describe("handlers", () => {
     expect(c.posts[0]!.blocks!.length).toBeGreaterThan(3);
   });
 
-  it("generates verified drafts from the selection, posts each with an Approve button, and Approve writes final files", async () => {
+  it("generates one verified draft from the selection, with Approve, and Approve writes final files", async () => {
     const c = new FakeClient();
     const st = state(outDir);
     const alerter = new MemoryAlerter();
     const good = await generateDrafts(c, "D1", [items[0]!.id, items[1]!.id], st, alerter);
-    expect(good.map((d) => d.id)).toEqual(["brief", "standard", "events-first"]);
+    expect(good.map((d) => d.id)).toEqual(["events-first"]);
     expect(alerter.sent).toEqual([]);
-    expect(c.posts).toHaveLength(4); // summary + 3 drafts
-    const approveBtn = (c.posts[1]!.blocks!.at(-1) as { elements: Array<{ action_id: string; value: string }> }).elements[0]!;
-    expect(approveBtn).toMatchObject({ action_id: ACTION.approve, value: "brief" });
-    expect(JSON.stringify(c.posts[2]!.blocks)).toContain("<https://www.eventbrite.ca/e/yoga|Event page>");
-    expect(JSON.stringify(c.posts[2]!.blocks)).not.toContain("Volta story number");
+    expect(c.posts).toHaveLength(1); // one draft, and nothing held so no notes message
+    const actions = (c.posts[0]!.blocks!.at(-1) as { elements: Array<{ action_id: string; value?: string }> }).elements;
+    expect(actions.map((e) => e.action_id)).toEqual([ACTION.changeItems, ACTION.approve]);
+    expect(actions.at(-1)).toMatchObject({ action_id: ACTION.approve, value: "events-first" });
+    expect(JSON.stringify(c.posts[0]!.blocks)).toContain("<https://www.eventbrite.ca/e/yoga|Event page>");
+    expect(JSON.stringify(c.posts[0]!.blocks)).not.toContain("Volta story number");
 
-    const paths = await approveDraft(c, "D1", "standard", st);
+    const paths = await approveDraft(c, "D1", "events-first", st);
     expect(paths).toBeDefined();
     expect(existsSync(paths!.html)).toBe(true);
     expect(readFileSync(paths!.md, "utf8")).toContain("**Yoga**");
-    expect(c.posts.at(-1)!.text).toMatch(/Approved: Standard/);
+    expect(c.posts.at(-1)!.text).toMatch(/Approved: Events first/);
   });
 
   it("empty selection and unknown draft ids get a plain-language message, not a crash", async () => {
@@ -154,7 +155,7 @@ describe("handlers", () => {
 
   it("draftBlocks carry the verification status and split long drafts into several sections", () => {
     const d = buildDrafts(items, { timeZone: TZ })[1]!;
-    const blocks = draftBlocks(d, 1, 3);
+    const blocks = draftBlocks(d, { itemCount: d.item_ids.length });
     expect(JSON.stringify(blocks[1])).toContain("verified: yes");
     expect(blocks.filter((b) => b.type === "section").length).toBeGreaterThanOrEqual(1);
     for (const b of blocks.filter((b) => b.type === "section")) expect(((b.text as { text: string }).text).length).toBeLessThanOrEqual(3000);
