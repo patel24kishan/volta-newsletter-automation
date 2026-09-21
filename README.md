@@ -82,7 +82,7 @@ src/
   fetchers/       one fetcher per live source (RSS, ICS calendar, LinkedIn, Slack channel)
   pipeline/       dedupe, extractive summarize/condense, rank, no-fabrication verify
   draft/          template rendering (Brief / Standard / Events-first layouts)
-  surface/        Slack Block Kit builders, Socket Mode wrapper, local preview server
+  surface/        Slack Block Kit builders, Socket Mode wrapper
   publish/        email-platform campaign creation
   schedule/       first-workday (statutory holiday) computation
   cli/            demo:week, demo:slack, check:sources, fixtures:record entry points

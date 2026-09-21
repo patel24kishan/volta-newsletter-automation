@@ -215,24 +215,105 @@ export function renderMarkdown(blocks: Block[]): string {
   return out.join("\n").trim() + "\n";
 }
 
+/** Mailchimp merge tags the email frame needs. A "code your own" campaign must carry the unsubscribe and address tags. */
+export const MERGE_TAGS = {
+  address: "*|LIST:ADDRESSLINE|*",
+  unsub: "*|UNSUB|*",
+  profile: "*|UPDATE_PROFILE|*",
+  archive: "*|ARCHIVE|*",
+} as const;
+
+/**
+ * Words that exist only in the HTML email frame, never in the Markdown the verifier reads. They are
+ * fixed text, so they cannot carry an invented fact; the test suite checks that the HTML says
+ * nothing else beyond the blocks themselves.
+ */
+export const HTML_CHROME: string[] = [
+  T.intro,
+  "Volta",
+  "You're getting this because you signed up at Volta.",
+  "Unsubscribe",
+  "Update your preferences",
+  "View in browser",
+];
+
+const C = { ink: "#111820", body: "#3F4956", muted: "#5A6472", rule: "#E2E6EA", accent: "#1B3FE0", page: "#EDEFF2" };
+const SANS = "Helvetica,Arial,sans-serif";
+const SERIF = "Georgia,'Times New Roman',serif";
+const HEAD_CSS =
+  "body{margin:0;padding:0;width:100% !important;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}" +
+  "table{border-collapse:collapse}" +
+  `a{color:${C.accent}}` +
+  "@media only screen and (max-width:620px){.wrap{width:100% !important}.pad{padding-left:24px !important;padding-right:24px !important}.h1{font-size:26px !important;line-height:32px !important}}";
+
+/**
+ * Email-safe HTML for Mailchimp: a 600px table layout with every critical style inline, an Outlook
+ * (MSO) block, a hidden preheader, and the unsubscribe/address footer Mailchimp requires. It renders
+ * the same blocks as the Markdown, so it adds no words beyond HTML_CHROME.
+ */
 export function renderHtml(blocks: Block[], title: string): string {
-  const parts: string[] = [];
-  for (const b of blocks) {
-    if (b.kind === "h1") parts.push(`<h1>${esc(b.text)}</h1>`);
-    else if (b.kind === "h2") parts.push(`<h2>${esc(b.text)}</h2>`);
-    else if (b.kind === "p") parts.push(`<p>${esc(b.text)}</p>`);
-    else if (b.kind === "item") {
-      const meta = b.meta.map((m) => `<p class="meta">${esc(m)}</p>`).join("");
-      const summary = b.summary ? `<p>${esc(b.summary)}</p>` : "";
-      const bullets = b.bullets?.length ? `<ul>${b.bullets.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
-      const links = b.links.length ? `<p>${b.links.map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join(" · ")}</p>` : "";
-      parts.push(`<article><h3>${esc(b.title)}</h3>${meta}${summary}${bullets}${links}</article>`);
-    }
+  const rows = blocks.map(htmlRow).join("\n");
+  const preheader = `${esc(T.intro)}${"&#847;&zwnj;&nbsp;".repeat(9)}`;
+  return [
+    `<!DOCTYPE html>`,
+    `<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">`,
+    `<head>`,
+    `<meta charset="utf-8">`,
+    `<meta name="viewport" content="width=device-width, initial-scale=1">`,
+    `<meta name="x-apple-disable-message-reformatting">`,
+    `<meta name="color-scheme" content="light">`,
+    `<meta name="supported-color-schemes" content="light">`,
+    `<title>${esc(title)}</title>`,
+    `<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->`,
+    `<style>${HEAD_CSS}</style>`,
+    `</head>`,
+    `<body style="margin:0;padding:0;background-color:${C.page};">`,
+    `<div style="display:none;font-size:1px;color:${C.page};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${preheader}</div>`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${C.page};"><tr><td align="center" style="padding:24px 12px;">`,
+    `<table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background-color:#FFFFFF;">`,
+    `<tr><td class="pad" style="padding:28px 40px 20px 40px;border-bottom:1px solid ${C.rule};font-family:${SERIF};font-size:22px;font-weight:bold;color:${C.ink};">Volta</td></tr>`,
+    rows,
+    htmlFooter(),
+    `</table>`,
+    `</td></tr></table>`,
+    `</body>`,
+    `</html>`,
+    ``,
+  ].join("\n");
+}
+
+function htmlRow(b: Block): string {
+  if (b.kind !== "item") return htmlTextRow(b.kind, b.text);
+  const meta = b.meta.map((m) => `<div style="font-size:14px;line-height:22px;color:${C.muted};">${esc(m)}</div>`).join("");
+  const summary = b.summary ? `<div style="margin-top:6px;color:${C.body};">${esc(b.summary)}</div>` : "";
+  const bullets = b.bullets?.length
+    ? `<ul style="margin:8px 0 0 0;padding-left:20px;color:${C.body};">${b.bullets.map((p) => `<li style="margin-bottom:6px;">${esc(p)}</li>`).join("")}</ul>`
+    : "";
+  const links = b.links.length
+    ? `<div style="margin-top:8px;font-size:14px;line-height:22px;">${b.links.map((l) => `<a href="${esc(l.href)}" style="color:${C.accent};text-decoration:underline;">${esc(l.label)}</a>`).join(" · ")}</div>`
+    : "";
+  return `<tr><td class="pad" style="padding:16px 40px 4px 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>` +
+    `<td style="padding-left:16px;border-left:3px solid ${C.rule};font-family:${SANS};font-size:16px;line-height:24px;color:${C.ink};">` +
+    `<strong>${esc(b.title)}</strong>${meta}${summary}${bullets}${links}</td></tr></table></td></tr>`;
+}
+
+function htmlTextRow(kind: "h1" | "h2" | "p", text: string): string {
+  if (kind === "h1") {
+    return `<tr><td class="pad" style="padding:40px;background-color:${C.ink};"><h1 class="h1" style="margin:0;font-family:${SERIF};font-size:30px;line-height:38px;font-weight:normal;color:#FFFFFF;">${esc(text)}</h1></td></tr>`;
   }
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>` +
-    `<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a;background:#fff}` +
-    `h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:2rem;border-bottom:1px solid #ccc}h3{font-size:1.05rem;margin:1.2rem 0 .2rem}` +
-    `.meta{margin:0;color:#444}a{color:#0b5cad;text-decoration:underline}a:focus{outline:3px solid #0b5cad;outline-offset:2px}</style></head><body><main>${parts.join("\n")}</main></body></html>\n`;
+  if (kind === "h2") {
+    return `<tr><td class="pad" style="padding:32px 40px 8px 40px;"><h2 style="margin:0 0 4px 0;font-family:${SERIF};font-size:20px;font-weight:normal;color:${C.ink};">${esc(text)}</h2>` +
+      `<div style="width:40px;height:2px;background-color:${C.accent};font-size:0;line-height:0;">&nbsp;</div></td></tr>`;
+  }
+  return `<tr><td class="pad" style="padding:12px 40px 4px 40px;font-family:${SANS};font-size:16px;line-height:24px;color:${C.body};">${esc(text)}</td></tr>`;
+}
+
+function htmlFooter(): string {
+  const link = (tag: string, label: string) => `<a href="${tag}" style="color:#7C8798;text-decoration:underline;">${label}</a>`;
+  return `<tr><td class="pad" style="padding:32px 40px;background-color:${C.ink};font-family:${SANS};font-size:12px;line-height:20px;color:#C6CEDA;">` +
+    `You're getting this because you signed up at Volta.<br>${MERGE_TAGS.address}<br>` +
+    `${link(MERGE_TAGS.unsub, "Unsubscribe")} &nbsp;|&nbsp; ${link(MERGE_TAGS.profile, "Update your preferences")} &nbsp;|&nbsp; ${link(MERGE_TAGS.archive, "View in browser")}` +
+    `</td></tr>`;
 }
 
 function esc(s: string): string {

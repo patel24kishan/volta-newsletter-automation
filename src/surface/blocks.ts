@@ -14,8 +14,7 @@ export const ACTION = {
   generate: "newsletter_generate",
   approve: "newsletter_approve",
   send: "newsletter_send",
-  /** Link buttons: Slack still posts an interaction for these, so they need ids to acknowledge. */
-  preview: "newsletter_preview",
+  /** A link button: Slack still posts an interaction for it, so it needs an id to acknowledge. */
   edit: "newsletter_edit",
 } as const;
 
@@ -140,24 +139,18 @@ export function draftNotesBlocks(selected: Item[]): Block[] {
   return blocks;
 }
 
-/** A link button opening the real rendered newsletter in a browser tab. */
-function previewButton(url: string, label = "Preview in browser"): Block {
-  return { type: "button", action_id: ACTION.preview, text: { type: "plain_text", text: label, emoji: false }, url };
-}
-
-export function draftBlocks(d: Draft, index: number, total: number, previewUrl?: string): Block[] {
+export function draftBlocks(d: Draft, index: number, total: number): Block[] {
   const blocks: Block[] = [
     { type: "header", text: { type: "plain_text", text: `Draft ${index + 1} of ${total}: ${d.name}`, emoji: false } },
     { type: "context", elements: [{ type: "mrkdwn", text: `Subject: ${escapeMrkdwn(d.subject)} · ${d.item_ids.length} item(s) · verified: ${d.verification.ok ? "yes" : "NO"}` }] },
   ];
   for (const chunk of chunkMrkdwn(markdownToMrkdwn(d.markdown))) blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
   const elements: Block[] = [{ type: "button", style: "primary", action_id: ACTION.approve, text: { type: "plain_text", text: `Approve draft ${index + 1}`, emoji: false }, value: d.id }];
-  if (previewUrl) elements.push(previewButton(previewUrl));
   blocks.push({ type: "actions", block_id: `approve_${d.id}`, elements });
   return blocks;
 }
 
-export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, previewUrl?: string, held: Item[] = []): Block[] {
+export function approvedBlocks(d: Draft, paths: { html: string; md: string }, campaign?: { id: string; editUrl: string; platform: string; audienceName: string; memberCount: number }, held: Item[] = []): Block[] {
   const blocks: Block[] = [
     { type: "section", text: { type: "mrkdwn", text: `*Approved: ${escapeMrkdwn(d.name)}*\nSubject: ${escapeMrkdwn(d.subject)}\nSaved to \`${paths.html}\` and \`${paths.md}\`.` } },
   ];
@@ -168,16 +161,14 @@ export function approvedBlocks(d: Draft, paths: { html: string; md: string }, ca
 
   if (!campaign) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "No email platform is configured, so this stops at the file. In production this step creates the campaign for you to send." }] });
-    if (previewUrl) blocks.push({ type: "actions", block_id: `preview_${d.id}`, elements: [previewButton(previewUrl, "Preview the newsletter")] });
     return blocks;
   }
 
-  blocks.push({ type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\nRead it, edit it, or send it as is:` } });
+  blocks.push({ type: "section", text: { type: "mrkdwn", text: `A draft campaign is now in ${escapeMrkdwn(campaign.platform)}, addressed to the audience *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount} contact${campaign.memberCount === 1 ? "" : "s"}).\nOpen it in ${escapeMrkdwn(campaign.platform)} to preview or edit it, or send it as is:` } });
 
-  // Read, then edit, then send: the destructive action stays the final thing you reach.
+  // Preview and edit both happen in the email platform; the destructive action stays the final thing you reach.
   const elements: Block[] = [];
-  if (previewUrl) elements.push(previewButton(previewUrl, "Preview the newsletter"));
-  elements.push({ type: "button", action_id: ACTION.edit, text: { type: "plain_text", text: `Edit in ${campaign.platform}`, emoji: false }, url: campaign.editUrl });
+  elements.push({ type: "button", action_id: ACTION.edit, text: { type: "plain_text", text: `Preview or edit in ${campaign.platform}`, emoji: false }, url: campaign.editUrl });
   elements.push({ type: "button", style: "danger", action_id: ACTION.send, text: { type: "plain_text", text: `Send via ${campaign.platform}`, emoji: false }, value: campaign.id, confirm: { title: { type: "plain_text", text: "Send the newsletter?" }, text: { type: "mrkdwn", text: `This sends to *${escapeMrkdwn(campaign.audienceName)}* (${campaign.memberCount}) now. It cannot be unsent.${held.length ? `\n\nIt includes ${held.length} item${held.length === 1 ? "" : "s"} marked for review: ${escapeMrkdwn(trim(held.map((i) => i.title.split(":")[0]).join(", "), 120))}.` : ""}` }, confirm: { type: "plain_text", text: "Send" }, deny: { type: "plain_text", text: "Not yet" } } });
   blocks.push({ type: "actions", block_id: `send_${d.id}`, elements });
   return blocks;

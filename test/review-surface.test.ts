@@ -119,7 +119,7 @@ describe("what the curator is told alongside the drafts", () => {
 
   it("the approval message and the Send confirmation both name a held item that is about to go out", () => {
     const draft = buildDrafts([held, clear], { timeZone: TZ })[1]!;
-    const blocks = approvedBlocks(draft, { html: "out/final.html", md: "out/final.md" }, { id: "c1", editUrl: "https://mail.test/e", platform: "Mailchimp", audienceName: "Volta", memberCount: 2 }, undefined, [held]);
+    const blocks = approvedBlocks(draft, { html: "out/final.html", md: "out/final.md" }, { id: "c1", editUrl: "https://mail.test/e", platform: "Mailchimp", audienceName: "Volta", memberCount: 2 }, [held]);
     const text = JSON.stringify(blocks);
     expect(text).toContain(`This newsletter includes 1 item ${REVIEW_LABEL}`);
     const send = (blocks.at(-1) as { elements: Array<{ action_id: string; confirm?: { text: { text: string } } }> }).elements.find((e) => e.action_id === ACTION.send)!;

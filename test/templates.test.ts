@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDrafts, whenLine } from "../src/draft/templates.js";
+import { buildDrafts, HTML_CHROME, MERGE_TAGS, whenLine } from "../src/draft/templates.js";
 import { sampleItem } from "./helpers.js";
 
 const TZ = "America/Halifax";
@@ -69,7 +69,7 @@ describe("buildDrafts", () => {
     const d = buildDrafts([evil], { timeZone: TZ, footer: "Drafted automatically from public sources and reviewed by Bader." })[1]!;
     expect(d.html).toContain("Tom &amp; Jerry &lt;script&gt;");
     expect(d.html).not.toContain("<script>");
-    expect(d.html).toContain('<html lang="en">');
+    expect(d.html).toContain('<html lang="en"');
     expect(d.markdown.trim().endsWith("reviewed by Bader.")).toBe(true);
     expect(d.verification.ok).toBe(true);
   });
@@ -81,3 +81,63 @@ describe("buildDrafts", () => {
     expect(ds[0]!.subject).toBe("Volta this week");
   });
 });
+
+describe("email-safe html for Mailchimp", () => {
+  const member = sampleItem({
+    type: "member_social", source: "member-updates", title: "Acme Robotics", byline: "Jane Doe",
+    insights: ["Closed a $1.4M seed round.", "Hired two engineers & a designer."],
+    raw_excerpt: "Acme Robotics Closed a $1.4M seed round. Hired two engineers & a designer.",
+  });
+  const sets = [
+    buildDrafts([mixer, yoga, post, news], { timeZone: TZ }),
+    buildDrafts([member], { timeZone: TZ }),
+    buildDrafts([], { timeZone: TZ }),
+  ].flat();
+
+  it("is a table layout with inline styles, an Outlook block and no web-page tags", () => {
+    for (const d of sets) {
+      expect(d.html.startsWith("<!DOCTYPE html>"), d.id).toBe(true);
+      expect(d.html).toContain('role="presentation"');
+      expect(d.html).toContain('width="600"');
+      expect(d.html).toContain("<!--[if mso]>");
+      expect(d.html).not.toMatch(/<main|<article|<script|<link |<img |@import|url\(/i);
+    }
+  });
+
+  it("carries each required Mailchimp merge tag exactly once, unescaped", () => {
+    for (const d of sets) for (const tag of Object.values(MERGE_TAGS)) {
+      expect(d.html.split(tag).length - 1, `${d.id} ${tag}`).toBe(1);
+    }
+    expect(sets[0]!.html).toContain(`href="${MERGE_TAGS.unsub}"`);
+  });
+
+  it("says nothing beyond the draft's own blocks plus fixed chrome", () => {
+    for (const d of sets) {
+      const allowed = new Set(words(`${d.markdown} ${HTML_CHROME.join(" ")}`));
+      const stray = words(visibleText(d.html)).filter((w) => !allowed.has(w));
+      expect(stray, `${d.id} html words missing from markdown or chrome`).toEqual([]);
+    }
+  });
+
+  it("keeps every title, bullet and link, and escapes item text", () => {
+    const d = buildDrafts([member], { timeZone: TZ })[1]!;
+    expect(d.html).toContain("Acme Robotics");
+    expect(d.html).toContain("<li");
+    expect(d.html).toContain("Hired two engineers &amp; a designer.");
+    expect(d.html).toContain(`<title>${d.subject}</title>`);
+  });
+});
+
+function visibleText(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<head>[\s\S]*?<\/head>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\*\|[A-Z_:]+\|\*/g, " ")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/&#?\w+;/g, " ");
+}
+
+function words(s: string): string[] {
+  return s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+}

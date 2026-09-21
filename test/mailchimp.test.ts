@@ -58,7 +58,9 @@ describe("MailchimpPublisher", () => {
     expect(create.body).toMatchObject({ type: "regular", recipients: { list_id: "L1" }, settings: { subject_line: draft.subject, from_name: "Volta", reply_to: "demo@example.com" } });
     const content = mc.calls.find((x) => x.method === "PUT")!;
     expect(content.url).toBe("https://us21.api.mailchimp.com/3.0/campaigns/camp123/content");
-    expect((content.body as { html: string }).html).toContain("<h1>");
+    const sentHtml = (content.body as { html: string }).html;
+    expect(sentHtml).toContain("<h1 ");
+    expect(sentHtml).toContain("*|UNSUB|*");
     await p.send("camp123");
     expect(mc.calls.at(-1)).toMatchObject({ method: "POST", url: "https://us21.api.mailchimp.com/3.0/campaigns/camp123/actions/send" });
   });
@@ -124,54 +126,39 @@ describe("Approve and Send with a publisher", () => {
     expect(c.posts.at(-1)!.text).toMatch(/Sent via FakeMail/);
   });
 
-  it("Approve offers a browser preview button, with Send still last", async () => {
+  it("Approve links to the campaign in the email platform for preview and edit, with Send still last", async () => {
     const c = new FakeClient();
-    const st = state(new FakePublisher());
-    const published: Array<{ id: string; html: string }> = [];
-    st.preview = { put: (id, html) => { published.push({ id, html }); return `http://127.0.0.1:3111/preview/${id}`; } };
-
-    await approveDraft(c, "D1", draft.id, st);
-
-    // The approved HTML itself is what gets served, not a markdown approximation.
-    expect(published).toHaveLength(1);
-    expect(published[0]!.id).toBe("final");
-    expect(published[0]!.html).toBe(draft.html);
+    await approveDraft(c, "D1", draft.id, state(new FakePublisher()));
 
     const blocks = c.posts.at(-1)!.blocks as Array<Record<string, unknown>>;
-    const actions = blocks.at(-1) as { type: string; elements: Array<{ action_id: string; url?: string; style?: string }> };
+    const actions = blocks.at(-1) as { type: string; elements: Array<{ action_id: string; url?: string; style?: string; text: { text: string } }> };
     expect(actions.type).toBe("actions");
-    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.preview, ACTION.edit, ACTION.send]);
-    expect(actions.elements[0]!.url).toBe("http://127.0.0.1:3111/preview/final");
-    // Edit opens the campaign in the email platform; only Send is destructive.
-    expect(actions.elements[1]!.url).toBe("https://mail.test/edit/1");
-    expect(actions.elements[1]!.style).toBeUndefined();
-    expect(actions.elements[2]!.style).toBe("danger");
+    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.edit, ACTION.send]);
+    // The email platform is where the newsletter is previewed; only Send is destructive.
+    expect(actions.elements[0]!.url).toBe("https://mail.test/edit/1");
+    expect(actions.elements[0]!.text.text).toBe("Preview or edit in FakeMail");
+    expect(actions.elements[0]!.style).toBeUndefined();
+    expect(actions.elements[1]!.style).toBe("danger");
+    expect(JSON.stringify(blocks)).not.toContain("127.0.0.1");
 
-    // No inline markdown dump: the message stays short and points at the real rendering.
+    // No inline markdown dump: the message stays short and points at the email platform.
     expect(blocks.length).toBeLessThan(10);
   });
 
-  it("omits the preview button when no preview server is running, keeping Edit and Send", async () => {
-    const c = new FakeClient();
-    await approveDraft(c, "D1", draft.id, state(new FakePublisher()));
-    const actions = (c.posts.at(-1)!.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string }> };
-    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.edit, ACTION.send]);
-  });
-
-  it("each generated draft gets its own preview URL so they can be compared", async () => {
+  it("each generated draft offers only Approve, since previews live in the email platform", async () => {
     const c = new FakeClient();
     const st: SurfaceState = { ...state(), candidates: [], drafts: new Map() };
-    const ids: string[] = [];
-    st.preview = { put: (id) => { ids.push(id); return `http://127.0.0.1:3111/preview/${id}`; } };
     st.candidates = [{ item: sampleItem({ type: "event", link: "https://e/1", title: "Yoga", raw_excerpt: "Yoga session." }), score: 1, reasons: [] }];
 
     await generateDrafts(c, "D1", [st.candidates[0]!.item.id], st, new MemoryAlerter());
 
-    expect(ids).toEqual(["draft-brief", "draft-standard", "draft-events-first"]);
-    const draftMsg = c.posts[1]!.blocks as Array<Record<string, unknown>>;
-    const actions = draftMsg.at(-1) as { elements: Array<{ action_id: string; url?: string }> };
-    expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.approve, ACTION.preview]);
-    expect(actions.elements[1]!.url).toBe("http://127.0.0.1:3111/preview/draft-brief");
+    const draftMessages = c.posts.slice(1);
+    expect(draftMessages).toHaveLength(3);
+    for (const m of draftMessages) {
+      const actions = (m.blocks as Array<Record<string, unknown>>).at(-1) as { elements: Array<{ action_id: string; url?: string }> };
+      expect(actions.elements.map((e) => e.action_id)).toEqual([ACTION.approve]);
+      expect(JSON.stringify(m.blocks)).not.toContain("127.0.0.1");
+    }
   });
 
   it("without a publisher, Approve says so and stops at the file", async () => {

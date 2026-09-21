@@ -2,8 +2,8 @@
  * Integration tests: the whole chain wired together, not mocked apart.
  *
  * Real code under test: fetchers -> storage -> dedupe -> summarize -> rank -> templates ->
- * verifier -> Slack block builders -> handlers -> preview server (a real HTTP server) ->
- * publisher. Only the network (fetchText), Slack transport, and the email platform are faked,
+ * verifier -> Slack block builders -> handlers -> publisher. Only the network (fetchText),
+ * Slack transport, and the email platform are faked,
  * because those are the three things we must not actually touch in a test.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -17,10 +17,9 @@ import { runWeek } from "../src/run-week.js";
 import { SqliteStorage } from "../src/storage.js";
 import { ACTION, selectedIdsFromState } from "../src/surface/blocks.js";
 import { approveDraft, generateDrafts, sendCampaign, sendReminder, type SlackClient, type SurfaceState } from "../src/surface/handlers.js";
-import { startPreviewServer, type PreviewServer } from "../src/surface/preview-server.js";
 import type { Publisher } from "../src/publish/types.js";
 import { verifyDraft } from "../src/pipeline/verify.js";
-import { TEMPLATE_PHRASES } from "../src/draft/templates.js";
+import { MERGE_TAGS, TEMPLATE_PHRASES } from "../src/draft/templates.js";
 
 const config: Config = {
   timezone: "America/Halifax", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
@@ -77,19 +76,16 @@ class FakeMailchimp implements Publisher {
   }
 }
 
-describe("end-to-end: fetch through Slack approval, preview and send", () => {
+describe("end-to-end: fetch through Slack approval and send", () => {
   let outDir: string;
   let storage: SqliteStorage;
-  let preview: PreviewServer;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     outDir = mkdtempSync(join(tmpdir(), "volta-int-"));
     storage = new SqliteStorage(":memory:");
-    preview = await startPreviewServer(0); // any free port, so a running demo never blocks the test
   });
-  afterEach(async () => {
+  afterEach(() => {
     storage.close();
-    await preview.close();
     rmSync(outDir, { recursive: true, force: true });
   });
 
@@ -109,7 +105,7 @@ describe("end-to-end: fetch through Slack approval, preview and send", () => {
     const st: SurfaceState = {
       candidates: run.candidates, timeZone: config.timezone, outDir,
       drafts: new Map(), selections: new Map(), env: { ALLOW_LIVE: "1" },
-      campaigns: new Set(), preview, publisher: mailchimp, audience: await mailchimp.verify(),
+      campaigns: new Set(), publisher: mailchimp, audience: await mailchimp.verify(),
     };
 
     // --- Reminder ---
@@ -129,15 +125,11 @@ describe("end-to-end: fetch through Slack approval, preview and send", () => {
     expect(drafts.map((d) => d.id)).toEqual(["brief", "standard", "events-first"]);
     expect(alerter.sent).toEqual([]); // nothing was withheld
 
-    // Each draft is previewable in a browser, and the served page is that draft's real HTML.
+    // Drafts are read in Slack: each has its own Approve button, and nothing points at a local server.
     for (const d of drafts) {
-      const btn = slack.buttons().find((b) => b.url?.endsWith(`/preview/draft-${d.id}`));
-      expect(btn, d.id).toBeDefined();
-      const res = await fetch(btn!.url!);
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toMatch(/text\/html/);
-      expect(await res.text()).toBe(d.html);
+      expect(slack.buttons().some((b) => b.action_id === ACTION.approve && b.value === d.id), d.id).toBe(true);
     }
+    expect(JSON.stringify(slack.posts)).not.toContain("127.0.0.1");
 
     // --- Decision two: approve, then send ---
     const chosen = drafts[1]!; // Standard
@@ -147,12 +139,11 @@ describe("end-to-end: fetch through Slack approval, preview and send", () => {
     expect(readFileSync(paths!.html, "utf8")).toBe(chosen.html);
 
     const approvalButtons = (slack.posts.at(-1)!.blocks!.at(-1) as { elements: Array<{ action_id: string; url?: string; value?: string }> }).elements;
-    expect(approvalButtons.map((b) => b.action_id)).toEqual([ACTION.preview, ACTION.edit, ACTION.send]);
+    expect(approvalButtons.map((b) => b.action_id)).toEqual([ACTION.edit, ACTION.send]);
 
-    // Preview serves the approved newsletter; Edit points at the real campaign.
-    expect(await (await fetch(approvalButtons[0]!.url!)).text()).toBe(chosen.html);
-    const campaignId = approvalButtons[2]!.value!;
-    expect(approvalButtons[1]!.url).toContain(campaignId);
+    // Preview and edit both happen in the email platform, so that button points at the real campaign.
+    const campaignId = approvalButtons[1]!.value!;
+    expect(approvalButtons[0]!.url).toContain(campaignId);
     expect(mailchimp.campaigns.get(campaignId)).toBe(chosen.html);
 
     expect(await sendCampaign(slack, channel, campaignId, st)).toBe(true);
@@ -167,6 +158,7 @@ describe("end-to-end: fetch through Slack approval, preview and send", () => {
     const sentHtml = mailchimp.campaigns.get(campaignId)!;
     for (const link of sentHtml.match(/href="([^"]+)"/g) ?? []) {
       const url = link.slice(6, -1);
+      if ((Object.values(MERGE_TAGS) as string[]).includes(url)) continue; // Mailchimp fills these in itself
       const known = selectedItems.some((i) => i.link === url || (i.related ?? []).some((r) => r.link === url));
       expect(known, `link not traceable to a source item: ${url}`).toBe(true);
     }
@@ -195,7 +187,7 @@ describe("end-to-end: fetch through Slack approval, preview and send", () => {
 
     const st: SurfaceState = {
       candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(),
-      env: {}, campaigns: new Set(), preview, publisher: mailchimp, audience: { audienceName: "Volta demo", memberCount: 2 },
+      env: {}, campaigns: new Set(), publisher: mailchimp, audience: { audienceName: "Volta demo", memberCount: 2 },
     };
 
     await expect(sendReminder(slack, "U_BADER", { candidates: run.candidates, preselectedIds: [], firstWorkday: run.first_workday, timeZone: config.timezone, clockLabel: clock.label, sourceNotes: [] }, st)).rejects.toThrow(/dry-run/);

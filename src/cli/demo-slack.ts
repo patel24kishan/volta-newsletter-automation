@@ -14,7 +14,6 @@ import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
 import { SqliteStorage } from "../storage.js";
 import { sendReminder, type SurfaceState } from "../surface/handlers.js";
-import { startPreviewServer } from "../surface/preview-server.js";
 import { createSlackApp } from "../surface/slack.js";
 
 loadDotEnv();
@@ -34,15 +33,6 @@ console.log(`fetched=${run.fetched} candidates=${run.candidates.length} drafts v
 
 const st: SurfaceState = { candidates: run.candidates, timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: process.env, campaigns: new Set() };
 
-// Local preview server so Slack can link to the real rendered newsletter in a browser tab.
-try {
-  const preview = await startPreviewServer();
-  st.preview = preview;
-  console.log(`preview: serving rendered drafts at ${preview.baseUrl}/preview/<id>`);
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { void preview.close().then(() => process.exit(0)); });
-} catch (e) {
-  console.log(`preview: not available (${(e as Error).message}); Slack will show drafts without a browser preview button`);
-}
 const publisher = mailchimpFromEnv(process.env);
 if (publisher) {
   // Fail loud before anyone presses Approve: bad key or audience id stops the demo here.

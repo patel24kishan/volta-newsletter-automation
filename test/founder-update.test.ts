@@ -286,7 +286,7 @@ describe("founder updates in the drafts", () => {
     // The Slack permalink is for Bader's candidate list, not for a subscriber who cannot open it.
     expect(standard.markdown).not.toContain("ghost24.slack.com");
     expect(standard.html).not.toContain("ghost24.slack.com");
-    expect(standard.html).toContain("<ul><li>Open beta of a hyperlocal marine forecast API");
+    expect(standard.html).toMatch(/<li[^>]*>Open beta of a hyperlocal marine forecast API/);
     // A held item that a person chose reads like any other story.
     expect(standard.markdown).toContain("**Bellwether Soil: Good material, can't run it yet.**");
 

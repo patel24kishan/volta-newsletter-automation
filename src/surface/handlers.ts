@@ -33,8 +33,6 @@ export interface SurfaceState {
   audience?: { audienceName: string; memberCount: number };
   /** Campaign ids created this session, so Send only acts on what Approve created. */
   campaigns: Set<string>;
-  /** Local preview server. Undefined means no "Preview in browser" button is offered. */
-  preview?: { put(id: string, html: string): string };
 }
 
 export async function sendReminder(client: SlackClient, userId: string, input: ReminderInput, st: SurfaceState): Promise<{ channel: string; ts?: string }> {
@@ -73,8 +71,7 @@ export async function generateDrafts(client: SlackClient, channel: string, selec
   });
   for (let i = 0; i < good.length; i++) {
     const d = good[i]!;
-    const url = st.preview?.put(`draft-${d.id}`, d.html);
-    await client.postMessage({ channel, text: `Draft ${i + 1} of ${good.length}: ${d.name} — ${d.subject}`, blocks: draftBlocks(d, i, good.length, url), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    await client.postMessage({ channel, text: `Draft ${i + 1} of ${good.length}: ${d.name} — ${d.subject}`, blocks: draftBlocks(d, i, good.length), ...(threadTs ? { thread_ts: threadTs } : {}) });
   }
   if (good.length === 0) await client.postMessage({ channel, text: "No draft passed verification. A maintainer has been alerted.", ...(threadTs ? { thread_ts: threadTs } : {}) });
   return good;
@@ -92,20 +89,19 @@ export async function approveDraft(client: SlackClient, channel: string, draftId
   writeFileSync(paths.html, d.html, "utf8");
   writeFileSync(paths.md, d.markdown, "utf8");
 
-  const previewUrl = st.preview?.put("final", d.html);
   // Held items that made it into this draft, so the last message before Send names them.
   const inDraft = new Set(d.item_ids);
   const held = st.candidates.map((c) => c.item).filter((i) => i.requires_review && inDraft.has(i.id));
 
   if (!st.publisher) {
-    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths, undefined, previewUrl, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths, undefined, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
     return paths;
   }
   try {
     const c = await st.publisher.publishDraft(d);
     st.campaigns.add(c.id);
     const audience = st.audience ?? { audienceName: "audience", memberCount: 0 };
-    await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }, previewUrl, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
+    await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
   } catch (e) {
     await client.postMessage({ channel, text: `Approved and saved to ${paths.html}, but creating the ${st.publisher.platform} campaign failed: ${(e as Error).message}`, ...(threadTs ? { thread_ts: threadTs } : {}) });
     throw e;
