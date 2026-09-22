@@ -3,14 +3,12 @@
  * pass a recorder. The Bolt wrapper (slack.ts) adapts real payloads to these.
  * Every post goes through assertLive: dry-run never reaches a human (CLAUDE.md section 4).
  */
-import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Alerter } from "../alerts.js";
 import type { SourceConfig } from "../config.js";
-import { buildDrafts, type Draft } from "../draft/templates.js";
-import { itemFromManualEvent, manualEventFromFields, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
-import { rankItems, type RankedItem } from "../pipeline/rank.js";
+import type { Draft } from "../draft/templates.js";
+import type { ManualEventErrors, ManualEventFields } from "../manual-events.js";
+import type { RankedItem } from "../pipeline/rank.js";
+import { addEvent, approve, buildDraft, send } from "../review/review.js";
 import { assertLive } from "../runtime.js";
 import type { Item } from "../schema.js";
 import type { Storage } from "../storage.js";
@@ -80,33 +78,20 @@ function reminderText(n: number): string {
 }
 
 /**
- * Add an event the curator knows about that no source lists. It is stored, so it survives a
- * restart and reappears on the next run, then shown in the candidate list already ticked: adding
- * it is the decision, so it should not have to be made twice. Nothing is invented on their behalf,
- * and the list labels the item as theirs.
+ * Add an event the curator knows about that no source lists (the review core stores it and ticks
+ * it), then show it in the list already posted. The list labels the item as the curator's.
  */
 export async function addManualEvent(client: SlackClient, fields: ManualEventFields, st: SurfaceState): Promise<{ item?: Item; errors?: ManualEventErrors }> {
   assertLive("add an event to the candidate list", st.env);
-  if (!st.storage || !st.manualSource) throw new Error("no manual events source is configured, so an event cannot be added");
-  const input = manualEventFromFields(fields, st.timeZone);
-  const errors = validateManualEvent(input, st.now?.() ?? new Date());
-  if (Object.keys(errors).length) return { errors };
-
-  const saved = st.storage.addManualEvent(input);
-  const item = itemFromManualEvent(saved, st.manualSource, st.manualSource.fallback_link);
-  st.candidates = rankItems([...st.candidates.map((c) => c.item), item], st.now?.() ?? new Date());
-
+  const r0 = st.reminder;
+  const res0 = addEvent(st, fields);
+  if ("errors" in res0) return { errors: res0.errors };
+  const { item } = res0;
   const r = st.reminder;
-  if (!r) return { item };
-  // Whatever was already ticked stays ticked, and the new event joins them.
-  const ticked = st.selections.get(r.channel) ?? r.input.preselectedIds;
-  const nextInput: ReminderInput = { ...r.input, candidates: st.candidates, preselectedIds: [...new Set([...ticked, item.id])] };
-  st.reminder = { ...r, input: nextInput };
-  st.selections.set(r.channel, nextInput.preselectedIds);
-  persistSession(st);
+  if (!r0 || !r) return { item };
 
-  const blocks = reminderBlocks(nextInput);
-  const text = reminderText(nextInput.candidates.length);
+  const blocks = reminderBlocks(r.input);
+  const text = reminderText(r.input.candidates.length);
   // Editing the original message keeps one list. If it can no longer be edited, post it afresh.
   if (client.updateMessage && r.ts) {
     let edited = false;
@@ -131,57 +116,39 @@ export function rememberSelection(st: SurfaceState, channel: string, ids: string
 
 export async function generateDrafts(client: SlackClient, channel: string, selectedIds: string[], st: SurfaceState, alerter: Alerter, threadTs?: string): Promise<Draft[]> {
   assertLive("post generated drafts to Slack", st.env);
-  const byId = new Map(st.candidates.map((c) => [c.item.id, c.item] as const));
-  const selected: Item[] = selectedIds.map((id) => byId.get(id)).filter((x): x is Item => Boolean(x));
-  if (selected.length === 0) {
-    await client.postMessage({ channel, text: "Nothing is selected. Tick at least one item, then press Generate drafts again.", ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return [];
-  }
-  const drafts = buildDrafts(selected, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"] });
-  const good = drafts.filter((d) => d.verification.ok);
-  for (const d of drafts.filter((d) => !d.verification.ok)) {
-    alerter.alert("error", `draft:${d.id}`, `withheld: ${d.verification.violations.map((v) => `${v.kind} "${v.value}"`).join(", ")}`, "inspect the items; the draft was not shown");
-  }
-
-  // The newsletter carries no review labels or notes to the editor, so they are said here instead.
-  const notes = draftNotesBlocks(selected);
-  if (notes.length) {
-    await client.postMessage({
-      channel, text: "Before you read the draft, two things about the items you picked.",
-      blocks: notes, ...(threadTs ? { thread_ts: threadTs } : {}),
-    });
-  }
-
-  // A failed rebuild leaves the previous draft exactly as it was, still readable and approvable.
-  if (good.length === 0) {
-    await client.postMessage({ channel, text: "No draft passed verification. A maintainer has been alerted.", ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return [];
-  }
-
+  const thread = threadTs ? { thread_ts: threadTs } : {};
   // Captured before it is replaced, so the retired message names its own newsletter.
   const previousPost = st.postedDraft;
   const previousRecord = previousPost ? st.drafts.get(previousPost.key) : undefined;
 
-  const d = good[0]!;
-  const key = randomUUID();
-  const previewId = st.preview ? randomUUID() : undefined;
-  const previewUrl = previewId ? st.preview!.put(d.html, previewId) : undefined;
-  // Only the newest draft is kept, so an Approve left over from an earlier one finds nothing.
-  st.drafts.clear();
-  st.drafts.set(key, { key, draft: d, items: selected, ...(previewId ? { previewId } : {}) });
-  persistSession(st);
+  const built = buildDraft(st, alerter, selectedIds);
+  if (!built.ok && built.reason === "nothing-selected") {
+    await client.postMessage({ channel, text: "Nothing is selected. Tick at least one item, then press Generate drafts again.", ...thread });
+    return [];
+  }
+  // The newsletter carries no review labels or notes to the editor, so they are said here instead.
+  const notes = draftNotesBlocks(built.ok ? built.items : built.reason === "not-verified" ? built.items : []);
+  if (notes.length) {
+    await client.postMessage({ channel, text: "Before you read the draft, two things about the items you picked.", blocks: notes, ...thread });
+  }
+  // A failed rebuild leaves the previous draft exactly as it was, still readable and approvable.
+  if (!built.ok) {
+    await client.postMessage({ channel, text: "No draft passed verification. A maintainer has been alerted.", ...thread });
+    return [];
+  }
 
   // A draft built from an older selection must stop being approvable the moment a newer one exists.
   await supersedePreviousDraft(client, previousPost, previousRecord?.draft);
 
+  const { key, draft: d } = built;
   const res = await client.postMessage({
     channel, text: `This week's newsletter: ${d.name} — ${d.subject}`,
-    blocks: draftBlocks(d, { key, itemCount: selected.length, ...(previewUrl ? { previewUrl } : {}) }),
-    ...(threadTs ? { thread_ts: threadTs } : {}),
+    blocks: draftBlocks(d, { key, itemCount: built.items.length, ...(built.previewUrl ? { previewUrl: built.previewUrl } : {}) }),
+    ...thread,
   });
   st.postedDraft = { key, channel, ...(res.ts ? { ts: res.ts } : {}) };
   persistSession(st);
-  return good;
+  return [d];
 }
 
 async function supersedePreviousDraft(client: SlackClient, posted: SurfaceState["postedDraft"], previous: Draft | undefined): Promise<void> {
@@ -215,68 +182,39 @@ export async function changeItems(client: SlackClient, st: SurfaceState): Promis
 
 export async function approveDraft(client: SlackClient, channel: string, draftKey: string, st: SurfaceState, threadTs?: string): Promise<{ html: string; md: string } | undefined> {
   assertLive("confirm the approved draft in Slack", st.env);
-  const record = st.drafts.get(draftKey);
-  if (!record) {
-    await client.postMessage({ channel, text: "That draft is no longer available. Press Generate drafts again.", ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return undefined;
+  const thread = threadTs ? { thread_ts: threadTs } : {};
+  const r = await approve(st, draftKey);
+  switch (r.status) {
+    case "missing":
+      await client.postMessage({ channel, text: "That draft is no longer available. Press Generate drafts again.", ...thread });
+      return undefined;
+    case "saved":
+      await client.postMessage({ channel, text: `Approved: ${r.draft.name}. Saved to ${r.files.html}`, blocks: approvedBlocks(r.draft, r.files, undefined, r.held), ...thread });
+      return r.files;
+    case "failed":
+      await client.postMessage({ channel, text: `Approved and saved to ${r.files.html}, but creating the ${r.platform} campaign failed: ${r.error.message}`, ...thread });
+      throw r.error;
+    case "already":
+      await client.postMessage({ channel, text: `Already approved: ${r.draft.name}. Its campaign is in ${r.campaign.platform}: ${r.campaign.editUrl}`, blocks: approvedBlocks(r.draft, r.files, { ...r.campaign, ...r.audience }, r.held), ...thread });
+      return r.files;
+    case "created":
+      await client.postMessage({ channel, text: `Approved: ${r.draft.name}. Campaign created in ${r.campaign.platform}: ${r.campaign.editUrl}`, blocks: approvedBlocks(r.draft, r.files, { ...r.campaign, ...r.audience }, r.held), ...thread });
+      return r.files;
   }
-  const d = record.draft;
-  mkdirSync(st.outDir, { recursive: true });
-  const paths = { html: join(st.outDir, "final.html"), md: join(st.outDir, "final.md") };
-  writeFileSync(paths.html, d.html, "utf8");
-  writeFileSync(paths.md, d.markdown, "utf8");
-
-  // Held items taken from what the draft was built from, so the warning before Send still
-  // appears after a restart, whatever the freshly fetched candidate list now contains.
-  const held = record.items.filter((i) => i.requires_review);
-
-  if (!st.publisher) {
-    await client.postMessage({ channel, text: `Approved: ${d.name}. Saved to ${paths.html}`, blocks: approvedBlocks(d, paths, undefined, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return paths;
-  }
-  const audience = st.audience ?? { audienceName: "audience", memberCount: 0 };
-  // Approving the same draft again, by a double click or after a restart, must not create a
-  // second campaign: it shows the one already made, whose Send stays guarded against repeats.
-  if (record.campaign) {
-    await client.postMessage({ channel, text: `Already approved: ${d.name}. Its campaign is in ${record.campaign.platform}: ${record.campaign.editUrl}`, blocks: approvedBlocks(d, paths, { ...record.campaign, ...audience }, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return paths;
-  }
-  let c: Awaited<ReturnType<Publisher["publishDraft"]>>;
-  try {
-    c = await st.publisher.publishDraft(d);
-  } catch (e) {
-    await client.postMessage({ channel, text: `Approved and saved to ${paths.html}, but creating the ${st.publisher.platform} campaign failed: ${(e as Error).message}`, ...(threadTs ? { thread_ts: threadTs } : {}) });
-    throw e;
-  }
-  // Remembered before anything else can fail: a campaign the app forgot it created could never
-  // be sent from Slack, and would sit in the email platform with nobody knowing why.
-  record.campaign = { id: c.id, editUrl: c.editUrl, platform: c.platform };
-  st.campaigns.add(c.id);
-  st.session?.recordCampaign(c.id, record.key);
-  persistSession(st);
-  await client.postMessage({ channel, text: `Approved: ${d.name}. Campaign created in ${c.platform}: ${c.editUrl}`, blocks: approvedBlocks(d, paths, { ...c, ...audience }, held), ...(threadTs ? { thread_ts: threadTs } : {}) });
-  return paths;
 }
 
 export async function sendCampaign(client: SlackClient, channel: string, campaignId: string, st: SurfaceState, threadTs?: string): Promise<boolean> {
-  assertLive("send the email campaign", st.env);
-  if (!st.publisher) {
-    await client.postMessage({ channel, text: "No email platform is configured.", ...(threadTs ? { thread_ts: threadTs } : {}) });
+  const thread = threadTs ? { thread_ts: threadTs } : {};
+  const r = await send(st, campaignId);
+  const refusal = {
+    "no-platform": "No email platform is configured.",
+    "already-sent": "That campaign has already been sent. It will not be sent a second time.",
+    unknown: "That campaign was not created in this session, so it will not be sent from here. Open it in the email platform instead.",
+  } as const;
+  if (r.status !== "sent") {
+    await client.postMessage({ channel, text: refusal[r.status], ...thread });
     return false;
   }
-  if (st.sent?.has(campaignId)) {
-    await client.postMessage({ channel, text: "That campaign has already been sent. It will not be sent a second time.", ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return false;
-  }
-  if (!st.campaigns.has(campaignId)) {
-    await client.postMessage({ channel, text: "That campaign was not created in this session, so it will not be sent from here. Open it in the email platform instead.", ...(threadTs ? { thread_ts: threadTs } : {}) });
-    return false;
-  }
-  await st.publisher.send(campaignId);
-  // Recorded as soon as it has gone, before the confirmation, so a second press is refused.
-  st.campaigns.delete(campaignId);
-  (st.sent ??= new Set()).add(campaignId);
-  st.session?.markCampaignSent(campaignId);
-  await client.postMessage({ channel, text: `Sent via ${st.publisher.platform}.`, blocks: sentBlocks(st.publisher.platform, campaignId), ...(threadTs ? { thread_ts: threadTs } : {}) });
+  await client.postMessage({ channel, text: `Sent via ${r.platform}.`, blocks: sentBlocks(r.platform, campaignId), ...thread });
   return true;
 }
