@@ -3,6 +3,8 @@
 A monthly newsletter for Volta (Halifax), reviewed by its curator, Bader, **inside the Claude app**.
 The system gathers and drafts everything; Bader only picks items, edits wording if he wants, and presses send.
 
+Built to run inside Claude. Slack is only a source now (the older Slack review is being retired).
+
 No AI writes newsletter text. Items are taken from real sources and put into fixed templates, and a
 verifier rejects any name, date or link that isn't in a source or in Bader's own words.
 
@@ -62,6 +64,15 @@ node bin\add-to-claude-config.mjs --live --now=2026-10-01T08:30:00-03:00 --demo-
 4. **Build:** *"build the draft"*. You get the draft text and a preview link.
 5. **Approve:** creates (or updates) the Mailchimp draft. In dry run this is refused, which is expected.
 6. **Send:** only if you want. It goes to the Mailchimp audience and can't be undone.
+
+## Next (not built yet)
+
+- **Phase 4: an install package for Bader.** A one-click Claude Desktop Extension (`.mcpb`). On install it
+  asks once for the Mailchimp key, list ID, reply-to address and Slack token, and the app stores them securely.
+  It starts in dry run, with live as a setting. It creates the monthly reminder task, and keeps his data when
+  it updates. Before building it, check that the Microsoft Store version of Claude supports these extensions.
+- **Phase 5 (optional):** remove the old Slack review code.
+- **Phase 6:** a short guide for Bader.
 
 ## Where things are
 
