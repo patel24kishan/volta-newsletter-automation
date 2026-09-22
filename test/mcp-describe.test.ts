@@ -4,7 +4,7 @@
  * missing copy, so Claude offered to write some. The list now says what will actually print.
  */
 import { describe, expect, it } from "vitest";
-import { describeItem, INSTRUCTIONS } from "../src/mcp/newsletter-server.js";
+import { describeItem, draftNotesText, INSTRUCTIONS } from "../src/mcp/newsletter-server.js";
 import { sampleItem } from "./helpers.js";
 
 const TZ = "America/Halifax";
@@ -36,7 +36,65 @@ describe("an item in the candidate list", () => {
   });
 });
 
+describe("full text and held items, as in the Slack list", () => {
+  it("never shortens an item's text", () => {
+    const long = "A".repeat(150) + " middle " + "B".repeat(150) + " the very end.";
+    const text = describeItem(sampleItem({ summary: long }), false, TZ);
+    expect(text).toContain(`  prints: ${long}`);
+    expect(text).not.toContain("...");
+  });
+
+  it("leads a held item with MARKED FOR REVIEW, then its points, then why it is on hold", () => {
+    const held = sampleItem({
+      type: "member_social", source: "member-updates", title: "Bellwether Soil: Good material, can't run it yet.", requires_review: true,
+      hold_note: "REVISIT w/c Sep 28 (embargo)", insights: ["Won a provincial soil-health grant.", "Pilot farms named after the funder announces."],
+    });
+    expect(describeItem(held, false, TZ).split("\n")).toEqual([
+      "- [ ] MARKED FOR REVIEW · Bellwether Soil: Good material, can't run it yet. | member_social from member-updates, 2026-09-14",
+      `  id: ${held.id}`,
+      "  prints:",
+      "    • Won a provincial soil-health grant.",
+      "    • Pilot farms named after the funder announces.",
+      "  note to editor (not printed): Volta launched a program for founders.",
+      "  On hold: REVISIT w/c Sep 28 (embargo)",
+      `  link: ${held.link}`,
+    ]);
+  });
+});
+
+describe("the notes that come with a built draft", () => {
+  it("follow the Slack wording: held items, then notes to the editor, then what Bader changed", () => {
+    expect(draftNotesText({
+      held: [{ id: "a", title: "Bellwether Soil", hold_note: "Embargo until Sep 30" }],
+      editorNotes: [{ id: "b", title: "Cove Health", notes: ["Avoid the phrase successful pilot.", "Confirm the partner's name."] }],
+      edited: [{ id: "c", title: "Fall Mixer", fields: ["description", "location"] }],
+    })).toEqual([
+      "**1 selected item is MARKED FOR REVIEW.** It is in this draft because you ticked it. Check the hold still applies before you send.",
+      "• **Bellwether Soil** · on hold: Embargo until Sep 30",
+      "",
+      "**Notes to the editor from the write-ups** (not in the newsletter)",
+      "**Cove Health**",
+      "      • Avoid the phrase successful pilot.",
+      "      • Confirm the partner's name.",
+      "",
+      "**Changed by you**",
+      "• **Fall Mixer**: description, location",
+    ]);
+  });
+
+  it("say nothing when there is nothing to say, and count held items in the plural", () => {
+    expect(draftNotesText({ held: [], editorNotes: [], edited: [] })).toEqual([]);
+    const two = draftNotesText({ held: [{ id: "a", title: "A" }, { id: "b", title: "B" }], editorNotes: [], edited: [] });
+    expect(two[0]).toBe("**2 selected items are MARKED FOR REVIEW.** They are in this draft because you ticked them. Check the hold still applies before you send.");
+  });
+});
+
 describe("the rules Claude is given", () => {
+  it("keep full text and the review labels", () => {
+    expect(INSTRUCTIONS).toMatch(/Do not shorten any item's text/);
+    expect(INSTRUCTIONS).toMatch(/Keep "MARKED FOR REVIEW" and "On hold:" exactly as returned/);
+  });
+
   it("forbid offering to write copy, and ask for the list to be shown rather than summarised", () => {
     expect(INSTRUCTIONS).toMatch(/never offer to write, rewrite or "fill in" copy/);
     expect(INSTRUCTIONS).toMatch(/note to editor \(not printed\)" are advice for Bader/);

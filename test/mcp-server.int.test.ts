@@ -126,7 +126,7 @@ describe("the newsletter tools, as Claude uses them", () => {
     const built = await c.call("build_draft");
     expect(built.text).toMatch(/Subject: Volta this month: /);
     expect(built.text).toMatch(/Preview: http:\/\/127\.0\.0\.1:3111\/preview\//);
-    expect(built.text).toMatch(/Edited by Bader: Fall Mixer \(description\)/);
+    expect(built.text).toContain("**Changed by you**\n• **Fall Mixer**: description");
     expect(built.text).toContain("Drinks, demos and the whole fall cohort.");
     expect(built.text).toContain("## Last month at Volta");
     expect(built.text).toContain("Pitch Night");

@@ -24,7 +24,7 @@ import type { Publisher } from "../publish/types.js";
 import { EDIT_FIELD_LABEL, EDIT_FIELDS, type EditField } from "../review/edits.js";
 import {
   addEvent, approve, buildDraft, CLAUDE_CHANNEL, candidateGroups, currentDraft, currentSelection, editItem, send, setSelection, startReview,
-  type ReviewState,
+  type DraftNotes, type ReviewState,
 } from "../review/review.js";
 import type { RunSummary } from "../run-week.js";
 import { DryRunRefusal, isLive } from "../runtime.js";
@@ -32,6 +32,7 @@ import { isPastEvent, type Item } from "../schema.js";
 import { describeWindow, periodOf, windowsFor } from "../schedule/period.js";
 import { whatIsDue } from "../schedule/scheduler.js";
 import type { SqliteStorage } from "../storage.js";
+import { REVIEW_LABEL } from "../surface/blocks.js";
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
 
 export const SERVER_NAME = "volta-newsletter";
@@ -43,7 +44,8 @@ Rules you must follow:
 - Never write newsletter text yourself, and never offer to write, rewrite or "fill in" copy for an item. The newsletter is built only from the sources and from Bader's own words. Every item already has what it prints (the "prints:" lines); nothing is missing that you need to supply.
 - Lines marked "note to editor (not printed)" are advice for Bader from the source. They never appear in the newsletter. Mention them only as notes for him to consider.
 - For edit_item and add_event, pass Bader's words exactly as he gave them. If he asks you to improve or shorten wording, suggest it in chat and only save it once he says to use it, word for word.
-- When Bader wants to see the candidates, show list_candidates' result as a list: every group heading, and every item with its [x] or [ ] tick, title and date. You may leave out ids and links. Do not replace the list with a summary or a selection of highlights.
+- When Bader wants to see the candidates, show list_candidates' result as a list: every group heading, and every item with its [x] or [ ] tick, title, date and its full text as returned. Do not shorten any item's text. You may leave out ids and links. Do not replace the list with a summary or a selection of highlights.
+- Keep "MARKED FOR REVIEW" and "On hold:" exactly as returned, so a held item is seen before it is ticked. Show a draft's notes to Bader as returned too.
 - Show a built draft's text exactly as returned, and give him the preview link. Do not summarise the draft in place of showing it.
 - Ask Bader before approve_draft and before send_campaign. Sending cannot be undone.
 
@@ -252,17 +254,13 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const r = buildDraft(st, d.alerter);
     if (!r.ok && r.reason === "nothing-selected") return text("Nothing is ticked. Tick at least one item with set_selection, then build again.", true);
     if (!r.ok) return text(`The draft did not pass verification, so it was not kept (the previous draft, if any, is still the one to approve):\n${r.violations.map((v) => `- ${v.kind}: ${v.value}`).join("\n")}`, true);
-    const notes = [
-      ...r.notes.edited.map((e) => `- Edited by Bader: ${e.title} (${e.fields.join(", ")})`),
-      ...r.notes.held.map((h) => `- On hold at the source: ${h.title}${h.hold_note ? ` (${h.hold_note})` : ""}. Check the hold still applies before sending.`),
-      ...r.notes.editorNotes.flatMap((n) => n.notes.map((x) => `- Note to the editor about ${n.title}: ${x}`)),
-    ];
+    const notes = draftNotesText(r.notes);
     return text([
       `Draft key: ${r.key}`,
       `Subject: ${r.draft.subject}`,
       r.previewUrl ? `Preview: ${r.previewUrl}` : "Preview: not available (the preview server could not start).",
       `Verified: every name, date and link traces to a source or to Bader.`,
-      ...(notes.length ? ["", "For Bader (not in the newsletter):", ...notes] : []),
+      ...(notes.length ? ["", ...notes] : []),
       "", "----- newsletter text (show verbatim) -----", r.draft.markdown, "----- end -----",
     ].join("\n"));
   });
@@ -326,27 +324,52 @@ export function describeItem(it: Item, ticked: boolean, timeZone: string): strin
   const p = partsInZone(new Date(it.date), timeZone);
   const date = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
   const time = `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  // A held item leads with the same label the Slack list used, so it is seen before it is ticked.
   const bits = [
-    `${ticked ? "[x]" : "[ ]"} ${it.title}`,
+    `${ticked ? "[x]" : "[ ]"} ${it.requires_review ? `${REVIEW_LABEL} · ` : ""}${it.title}`,
     it.type === "event" ? `${isPastEvent(it) ? "held" : "on"} ${date} ${time}${it.location ? ` at ${it.location}` : ""}` : `${it.type} from ${it.source}, ${date}`,
   ];
-  if (it.requires_review) bits.push(`ON HOLD${it.hold_note ? ` (${it.hold_note})` : ""}`);
   if (it.edited_fields?.length) bits.push(`edited by Bader: ${it.edited_fields.map((f) => EDIT_FIELD_LABEL[f as EditField] ?? f).join(", ")}`);
   if (it.image) bits.push("has an image");
   const lines = [`- ${bits.join(" | ")}`, `  id: ${it.id}`];
-  const clip = (s: string) => (s.length > 200 ? `${s.slice(0, 197)}...` : s);
-  // What the newsletter would print for this item. A founder update prints its points, not its
-  // summary: that summary is the write-up's advice to the editor, so it is labelled as such here,
-  // or it reads as copy that is missing and invites someone to write it.
+  // What the newsletter would print for this item, in full. A founder update prints its points,
+  // not its summary: that summary is the write-up's advice to the editor, so it is labelled as
+  // such, or it reads as copy that is missing and invites someone to write it.
   if (it.insights?.length) {
-    lines.push("  prints:", ...it.insights.map((p) => `    • ${clip(p)}`));
-    if (it.summary) lines.push(`  note to editor (not printed): ${clip(it.summary)}`);
+    lines.push("  prints:", ...it.insights.map((p) => `    • ${p}`));
+    if (it.summary) lines.push(`  note to editor (not printed): ${it.summary}`);
   } else if (it.summary) {
-    lines.push(`  prints: ${clip(it.summary)}`);
+    lines.push(`  prints: ${it.summary}`);
   } else {
     lines.push("  prints: the title only (the source gave no description)");
   }
-  for (const n of it.editor_notes ?? []) lines.push(`  note to editor (not printed): ${clip(n)}`);
+  if (it.requires_review && it.hold_note) lines.push(`  On hold: ${it.hold_note}`);
+  for (const n of it.editor_notes ?? []) lines.push(`  note to editor (not printed): ${n}`);
   lines.push(`  link: ${it.link}${it.message_link && it.message_link !== it.link ? ` | Slack message: ${it.message_link}` : ""}`);
   return lines.join("\n");
+}
+
+/**
+ * What Bader should know about the picked items that the newsletter will not say, worded and laid
+ * out as the Slack draft notes were: held items first, then the write-ups' notes to the editor,
+ * then what he changed. Empty when there is nothing to say.
+ */
+export function draftNotesText(notes: DraftNotes): string[] {
+  const held = notes.held;
+  return [
+    ...(held.length ? [
+      `**${held.length} selected item${held.length === 1 ? " is" : "s are"} ${REVIEW_LABEL}.** ${held.length === 1 ? "It is" : "They are"} in this draft because you ticked ${held.length === 1 ? "it" : "them"}. Check the hold still applies before you send.`,
+      ...held.map((h) => `• **${h.title}**${h.hold_note ? ` · on hold: ${h.hold_note}` : ""}`),
+    ] : []),
+    ...(notes.editorNotes.length ? [
+      ...(held.length ? [""] : []),
+      "**Notes to the editor from the write-ups** (not in the newsletter)",
+      ...notes.editorNotes.flatMap((n) => [`**${n.title}**`, ...n.notes.map((x) => `      • ${x}`)]),
+    ] : []),
+    ...(notes.edited.length ? [
+      ...(held.length || notes.editorNotes.length ? [""] : []),
+      "**Changed by you**",
+      ...notes.edited.map((e) => `• **${e.title}**: ${e.fields.join(", ")}`),
+    ] : []),
+  ];
 }
