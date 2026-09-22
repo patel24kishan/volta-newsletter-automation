@@ -68,7 +68,7 @@ describe("RssFetcher on synthetic feeds", () => {
     );
     const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
     expect(r.items.map((i) => i.link)).toEqual(["https://a.test/now"]);
-    expect(r.warnings.join("\n")).toMatch(/2 item\(s\) outside the 7-day window/);
+    expect(r.warnings.join("\n")).toMatch(/2 item\(s\) outside the window \(/);
   });
 
   it("the clock override moves the window", async () => {

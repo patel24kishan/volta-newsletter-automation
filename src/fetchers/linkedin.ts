@@ -14,6 +14,7 @@ import type { SourceConfig } from "../config.js";
 import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { collapseWhitespace, decodeEntities, firstSentences } from "../text.js";
+import { describeWindow, windowsOf } from "../schedule/period.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 export interface LinkedInPost {
@@ -54,8 +55,8 @@ export class LinkedInCompanyFetcher implements Fetcher {
       return { source: source.id, items: [], warnings: [...warnings, "page fetched but no posts found; markup may have changed"], bytes: html.length };
     }
 
-    const now = ctx.clock.now();
-    const from = new Date(now.getTime() - ctx.config.content_window_days * 86_400_000);
+    const { content } = windowsOf(ctx);
+    const { from, to: now } = content;
     const items: Item[] = [];
     const seen = new Set<string>();
     let outside = 0;
@@ -93,7 +94,14 @@ export class LinkedInCompanyFetcher implements Fetcher {
     }
 
     items.sort((a, b) => b.date.localeCompare(a.date));
-    if (outside) warnings.push(`${outside} post(s) outside the ${ctx.config.content_window_days}-day window`);
+    if (outside) warnings.push(`${outside} post(s) outside the window (${describeWindow(content, ctx.config.timezone)})`);
+    // The public page shows only the most recent posts. If even the oldest one shown is inside the
+    // window, earlier posts in it may exist that this run could not see; say so rather than imply
+    // the list is complete.
+    const dates = posts.map((p) => Date.parse(p.date)).filter((t) => !Number.isNaN(t));
+    if (dates.length && Math.min(...dates) > from.getTime()) {
+      warnings.push(`LinkedIn's public page only reached back to ${new Date(Math.min(...dates)).toISOString().slice(0, 10)}; posts earlier in the window may be missing`);
+    }
     return { source: source.id, items, warnings, bytes: html.length };
   }
 }

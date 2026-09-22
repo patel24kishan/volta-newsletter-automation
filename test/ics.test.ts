@@ -92,7 +92,7 @@ describe("IcsFetcher on synthetic calendars", () => {
     );
     const r = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => body });
     expect(r.items.map((i) => i.title)).toEqual(["Near"]);
-    expect(r.warnings.join("\n")).toMatch(/2 event\(s\) outside the next 14 days/);
+    expect(r.warnings.join("\n")).toMatch(/2 event\(s\) outside the window \(coming 2026-09-15 /);
 
     const oct = resolveClock(["--now=2026-10-25T12:00:00Z"], {});
     const r2 = await fetcher.fetch(source, { config: cfg(), clock: oct, fetchText: async () => body });

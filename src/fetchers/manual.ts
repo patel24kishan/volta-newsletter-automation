@@ -1,12 +1,13 @@
 /**
  * Manual events fetcher. Reads what the curator entered by hand from storage rather than a feed,
  * and emits it every run, because the weekly cycle rebuilds its candidates from freshly fetched
- * items each time. Same window as the calendar: now to now + events_window_days, so a past event
- * drops off on its own.
+ * items each time. Same windows as the calendar: what is coming up, plus (monthly) what was held in
+ * the look back, so an older event drops off on its own.
  */
 import type { SourceConfig } from "../config.js";
 import { itemFromManualEvent } from "../manual-events.js";
 import { isAbsoluteHttpUrl, type Item } from "../schema.js";
+import { windowsOf } from "../schedule/period.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 export class ManualEventsFetcher implements Fetcher {
@@ -20,11 +21,10 @@ export class ManualEventsFetcher implements Fetcher {
       return { source: source.id, items: [], warnings: [], error: "fallback_link must be an http(s) page, since a manually added event may have no link of its own", bytes: 0 };
     }
 
-    const now = ctx.clock.now();
-    const until = new Date(now.getTime() + ctx.config.events_window_days * 86_400_000);
+    const { upcoming, past } = windowsOf(ctx);
     let events;
     try {
-      events = storage.listManualEvents(now.toISOString(), until.toISOString());
+      events = storage.listManualEvents((past?.from ?? upcoming.from).toISOString(), upcoming.to.toISOString());
     } catch (e) {
       return { source: source.id, items: [], warnings: [], error: `could not read manually added events: ${(e as Error).message}`, bytes: 0 };
     }

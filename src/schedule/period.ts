@@ -131,6 +131,14 @@ export function windowsFor(now: Date, config: PeriodConfig & Pick<Config, "conte
   };
 }
 
+/**
+ * The windows a fetch should read: the run's, when it passed them, else worked out from the clock
+ * and config, so a fetcher called on its own (check:sources, a test) reads the same spans.
+ */
+export function windowsOf(ctx: { windows?: Windows; clock: { now(): Date }; config: Parameters<typeof windowsFor>[1] }): Windows {
+  return ctx.windows ?? windowsFor(ctx.clock.now(), ctx.config);
+}
+
 /** True when an instant falls in a window. */
 export function inWindow(t: Date | number, w: Window): boolean {
   const ms = typeof t === "number" ? t : t.getTime();

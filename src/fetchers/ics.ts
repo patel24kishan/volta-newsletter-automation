@@ -9,6 +9,7 @@ import type { SourceConfig } from "../config.js";
 import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { collapseWhitespace, firstSentences, stripHtml } from "../text.js";
+import { describeWindow, windowsOf } from "../schedule/period.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 export interface IcsProperty {
@@ -32,8 +33,8 @@ export class IcsFetcher implements Fetcher {
     const parsed = parseIcs(body);
     if ("error" in parsed) return { source: source.id, items: [], warnings: [], error: parsed.error, bytes: body.length };
 
-    const now = ctx.clock.now();
-    const until = new Date(now.getTime() + ctx.config.events_window_days * 86_400_000);
+    const { upcoming, past } = windowsOf(ctx);
+    const now = upcoming.from;
     const tz = ctx.config.timezone;
     const warnings: string[] = [];
     const items: Item[] = [];
@@ -60,8 +61,11 @@ export class IcsFetcher implements Fetcher {
         cancelled++;
         continue;
       }
-      // Upcoming or still in progress: ends after now and starts before the window closes.
-      if ((end as Date) < now || start > until) {
+      // Upcoming or still in progress: ends after now and starts before the window closes. With a
+      // look back (monthly), also an event already held in it: started in it and over by now.
+      const coming = (end as Date) >= now && start < upcoming.to;
+      const held = past !== undefined && start >= past.from && (end as Date) < now;
+      if (!coming && !held) {
         outside++;
         continue;
       }
@@ -104,7 +108,7 @@ export class IcsFetcher implements Fetcher {
     }
 
     items.sort((a, b) => a.date.localeCompare(b.date));
-    if (outside) warnings.push(`${outside} event(s) outside the next ${ctx.config.events_window_days} days`);
+    if (outside) warnings.push(`${outside} event(s) outside the window (${past ? `held ${describeWindow(past, tz)}, or ` : ""}coming ${describeWindow(upcoming, tz)})`);
     if (cancelled) warnings.push(`${cancelled} cancelled event(s) dropped`);
     return { source: source.id, items, warnings, bytes: body.length };
   }

@@ -9,6 +9,7 @@ import type { SourceConfig } from "../config.js";
 import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { collapseWhitespace, decodeEntities, firstSentences, mentionsAny, stripHtml } from "../text.js";
+import { describeWindow, windowsOf } from "../schedule/period.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 interface RawRssItem {
@@ -36,8 +37,8 @@ export class RssFetcher implements Fetcher {
       return { source: source.id, items: [], warnings: [], error: parsed.error, bytes: body.length };
     }
 
-    const now = ctx.clock.now();
-    const from = new Date(now.getTime() - ctx.config.content_window_days * 86_400_000);
+    const { content } = windowsOf(ctx);
+    const { from, to: now } = content;
     const warnings: string[] = [];
     const items: Item[] = [];
     let outsideWindow = 0;
@@ -88,7 +89,7 @@ export class RssFetcher implements Fetcher {
       });
     }
 
-    if (outsideWindow) warnings.push(`${outsideWindow} item(s) outside the ${ctx.config.content_window_days}-day window`);
+    if (outsideWindow) warnings.push(`${outsideWindow} item(s) outside the window (${describeWindow(content, ctx.config.timezone)})`);
     if (offTopic) warnings.push(`${offTopic} item(s) dropped as off-topic`);
     return { source: source.id, items, warnings, bytes: body.length };
   }

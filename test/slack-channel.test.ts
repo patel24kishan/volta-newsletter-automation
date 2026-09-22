@@ -138,7 +138,7 @@ describe("SlackChannelFetcher", () => {
   it("warns when the channel had more messages than one page", async () => {
     const { fn } = api([{ type: "message", user: "U1", ts: ts("2026-09-16T14:00:00Z"), text: "<https://a.test/1>" }], undefined, { has_more: true });
     const r = await fetcher.fetch(source, { config: cfg(), clock, slackApi: fn, env });
-    expect(r.warnings.join()).toMatch(/only the most recent 200/);
+    expect(r.warnings.join()).toMatch(/only the most recent 1 were read/);
   });
 
   describe("setup failures say exactly what to fix", () => {

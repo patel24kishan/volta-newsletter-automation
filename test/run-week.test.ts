@@ -82,3 +82,51 @@ describe("runWeek", () => {
     expect(alerter.sent.some((a) => a.source === "schedule" && /config override/.test(a.message))).toBe(true);
   });
 });
+
+describe("runWeek on a monthly cadence (integration)", () => {
+  let outDir: string;
+  let storage: SqliteStorage;
+  beforeEach(() => { outDir = mkdtempSync(join(tmpdir(), "volta-run-monthly-")); storage = new SqliteStorage(":memory:"); });
+  afterEach(() => { storage.close(); rmSync(outDir, { recursive: true, force: true }); });
+
+  // Early September news, a September event already held, one coming in October, one in November.
+  const monthlyBodies: Record<string, string> = {
+    "https://news.test/rss": `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>Volta opens applications for its fall cohort</title><link>https://news.test/cohort</link><guid>c</guid><pubDate>Thu, 03 Sep 2026 12:00:00 GMT</pubDate><description>Volta opened applications for its fall cohort of founders. Applications close in October.</description></item>
+</channel></rss>`,
+    "https://cal.test/ics": ["BEGIN:VCALENDAR", "VERSION:2.0",
+      "BEGIN:VEVENT", "UID:demo", "SUMMARY:Demo Night", "DTSTART:20260917T220000Z", "DTEND:20260918T000000Z", "URL:https://www.eventbrite.ca/e/demo", "DESCRIPTION:Founders demo what they built this summer.", "LOCATION:Volta", "END:VEVENT",
+      "BEGIN:VEVENT", "UID:mixer", "SUMMARY:Fall Mixer", "DTSTART:20261022T210000Z", "DTEND:20261022T230000Z", "URL:https://www.eventbrite.ca/e/mixer", "DESCRIPTION:Meet the fall cohort.", "LOCATION:Volta", "END:VEVENT",
+      "BEGIN:VEVENT", "UID:nov", "SUMMARY:November Talk", "DTSTART:20261105T210000Z", "DTEND:20261105T230000Z", "URL:https://www.eventbrite.ca/e/nov", "END:VEVENT",
+      "END:VCALENDAR"].join("\r\n"),
+    "https://li.test/company": LI,
+  };
+  const monthlyFetch = async (url: string) => {
+    const b = monthlyBodies[url];
+    if (b === undefined) throw new Error(`GET ${url} returned HTTP 503`);
+    return b;
+  };
+  const titles = (s: Awaited<ReturnType<typeof runWeek>>) => s.candidates.map((c) => c.item.title);
+
+  it("reads last month's news and held events and this month's coming ones, through verified drafts", async () => {
+    const alerter = new MemoryAlerter();
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {}); // 08:30 in Halifax
+    const s = await runWeek({ config: { ...config, cadence: "monthly" }, clock, storage, alerter, outDir, fetchText: monthlyFetch });
+
+    expect(s.sources.map((x) => `${x.id}:${x.status}`)).toEqual(["google-news:ok", "volta-calendar:ok", "volta-linkedin:ok"]);
+    expect(titles(s)).toEqual(expect.arrayContaining(["Volta opens applications for its fall cohort", "Demo Night", "Fall Mixer"]));
+    expect(titles(s)).not.toContain("November Talk");
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+    const md = readFileSync(s.drafts[0]!.file_md, "utf8");
+    expect(md).toContain("Fall Mixer");
+  });
+
+  it("with the same sources, a weekly run still reads only the last 7 days and the next 14", async () => {
+    // The news and Demo Night are older than 7 days and the Fall Mixer is 21 days away, so a
+    // weekly run on the same morning finds none of them: the monthly windows made the difference.
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {});
+    const s = await runWeek({ config, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    expect(titles(s)).toEqual([]);
+    expect(s.sources.find((x) => x.id === "volta-calendar")!.warnings.join()).toMatch(/3 event\(s\) outside the window/);
+  });
+});

@@ -4,9 +4,10 @@
  * Usage: npm run check:sources [-- --now=2026-10-13T08:30:00-03:00]
  */
 import { loadDotEnv } from "./env.js";
-import { loadConfig } from "../config.js";
 import { resolveClock } from "../clock.js";
 import { fetcherFor } from "../fetchers/index.js";
+import { cadenceOf, loadConfig } from "../config.js";
+import { describeWindow, windowsFor } from "../schedule/period.js";
 import { SqliteStorage } from "../storage.js";
 
 loadDotEnv();
@@ -16,7 +17,10 @@ const outDir = process.env.OUT_DIR ?? "out";
 // The manual-events source reads what the curator added rather than a feed, so it needs storage.
 const storage = new SqliteStorage(process.env.DATABASE_PATH ?? `${outDir}/newsletter.sqlite`);
 
-console.log(`check:sources  clock=${clock.label}  now=${clock.now().toISOString()}  window=${config.content_window_days}d back / ${config.events_window_days}d ahead`);
+const w = windowsFor(clock.now(), config);
+const tz = config.timezone;
+console.log(`check:sources  clock=${clock.label}  now=${clock.now().toISOString()}  cadence=${cadenceOf(config)}`);
+console.log(`  content ${describeWindow(w.content, tz)} | upcoming events ${describeWindow(w.upcoming, tz)}${w.past ? ` | past events ${describeWindow(w.past, tz)}` : ""}`);
 console.log("");
 
 let failures = 0;

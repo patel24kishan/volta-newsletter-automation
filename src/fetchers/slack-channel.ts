@@ -13,7 +13,12 @@ import type { SourceConfig } from "../config.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { condense } from "../pipeline/condense.js";
 import { collapseWhitespace, decodeEntities, firstSentences, splitSentences } from "../text.js";
+import { windowsOf } from "../schedule/period.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
+
+/** Messages per page of conversations.history, and the most pages read in one run (1,000 messages). */
+const PAGE_SIZE = 200;
+const MAX_PAGES = 5;
 
 /** Slack wraps links as <https://x> or <https://x|label>. */
 const SLACK_LINK = /<(https?:\/\/[^|>\s]+)(?:\|([^>]*))?>/g;
@@ -29,14 +34,26 @@ export class SlackChannelFetcher implements Fetcher {
     const call = ctx.slackApi ?? makeSlackCaller(env.SLACK_BOT_TOKEN);
     if (!call) return { source: source.id, items: [], warnings: [], error: "SLACK_BOT_TOKEN is not set, so the channel cannot be read", bytes: 0 };
 
-    const now = ctx.clock.now();
-    const oldest = (now.getTime() - ctx.config.content_window_days * 86_400_000) / 1000;
+    const { content } = windowsOf(ctx);
+    const window = { oldest: String(content.from.getTime() / 1000), latest: String(content.to.getTime() / 1000) };
 
-    let res: Record<string, unknown>;
-    try {
-      res = await call("conversations.history", { channel, oldest: String(oldest), limit: "200" });
-    } catch (e) {
-      return { source: source.id, items: [], warnings: [], error: `could not read the Slack channel: ${(e as Error).message}`, bytes: 0 };
+    // A month of a busy channel runs past one page, so pages are followed up to a cap; the cap
+    // keeps one noisy month from turning a weekly run into hundreds of API calls.
+    const messages: Array<Record<string, unknown>> = [];
+    let bytes = 0;
+    let cursor = "";
+    let res: Record<string, unknown> = {};
+    for (let page = 0; page < MAX_PAGES; page++) {
+      try {
+        res = await call("conversations.history", { channel, ...window, limit: String(PAGE_SIZE), ...(cursor ? { cursor } : {}) });
+      } catch (e) {
+        return { source: source.id, items: [], warnings: [], error: `could not read the Slack channel: ${(e as Error).message}`, bytes: 0 };
+      }
+      if (res.ok !== true) break;
+      bytes += JSON.stringify(res).length;
+      if (Array.isArray(res.messages)) messages.push(...(res.messages as Array<Record<string, unknown>>));
+      cursor = String((res.response_metadata as { next_cursor?: string } | undefined)?.next_cursor ?? "");
+      if (res.has_more !== true || !cursor) break;
     }
     if (res.ok !== true) {
       const err = String(res.error ?? "unknown error");
@@ -46,8 +63,6 @@ export class SlackChannelFetcher implements Fetcher {
       return { source: source.id, items: [], warnings: [], error: `Slack refused the request: ${err}${hint}`, bytes: 0 };
     }
 
-    const messages = Array.isArray(res.messages) ? (res.messages as Array<Record<string, unknown>>) : [];
-    const bytes = JSON.stringify(res).length;
     const warnings: string[] = [];
     const items: Item[] = [];
     const names = new Map<string, string>();
@@ -114,7 +129,7 @@ export class SlackChannelFetcher implements Fetcher {
     items.sort((a, b) => b.date.localeCompare(a.date));
     if (noMessageLink) warnings.push(`${noMessageLink} message link(s) could not be fetched, so those items show only the shared link`);
     if (noLink) warnings.push(`${noLink} message(s) had no link and were skipped`);
-    if (res.has_more === true) warnings.push("the channel had more messages than one page; only the most recent 200 were read");
+    if (res.has_more === true) warnings.push(`the channel had more messages in the window than could be read; only the most recent ${messages.length} were read`);
     return { source: source.id, items, warnings, bytes };
   }
 }
