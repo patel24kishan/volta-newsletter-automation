@@ -13,11 +13,11 @@ import { join } from "node:path";
 import type { Alerter } from "../alerts.js";
 import { buildDrafts, type Draft } from "../draft/templates.js";
 import { itemFromManualEvent, manualEventFromFields, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
-import { rankItems } from "../pipeline/rank.js";
+import { rankItems, type RankedItem } from "../pipeline/rank.js";
 import type { Violation } from "../pipeline/verify.js";
 import type { PublishedCampaign } from "../publish/types.js";
 import { assertLive } from "../runtime.js";
-import type { Item } from "../schema.js";
+import { isPastEvent, type Item } from "../schema.js";
 import type { ReminderInput } from "../surface/blocks.js";
 import type { SurfaceState } from "../surface/handlers.js";
 import { persistSession, type DraftRecord } from "../surface/session.js";
@@ -47,6 +47,31 @@ export function startReview(st: ReviewState, input: ReminderInput, channel = CLA
   st.selections.set(channel, input.preselectedIds);
   st.week ??= input.firstWorkday.weekMonday;
   persistSession(st);
+}
+
+/**
+ * The candidates as the curator reads them: events still to come (soonest first), events already
+ * held last month (most recent first), and everything else in rank order. Past and upcoming are
+ * never mixed, here or in the newsletter.
+ */
+export interface CandidateGroups {
+  upcomingEvents: RankedItem[];
+  pastEvents: RankedItem[];
+  other: RankedItem[];
+}
+
+export function candidateGroups(st: Pick<ReviewState, "candidates">): CandidateGroups {
+  const upcomingEvents: RankedItem[] = [];
+  const pastEvents: RankedItem[] = [];
+  const other: RankedItem[] = [];
+  for (const c of st.candidates) {
+    if (isPastEvent(c.item)) pastEvents.push(c);
+    else if (c.item.type === "event") upcomingEvents.push(c);
+    else other.push(c);
+  }
+  upcomingEvents.sort((a, b) => a.item.date.localeCompare(b.item.date));
+  pastEvents.sort((a, b) => b.item.date.localeCompare(a.item.date));
+  return { upcomingEvents, pastEvents, other };
 }
 
 /** The ids ticked now, in candidate order. */
@@ -81,6 +106,7 @@ export function addEvent(st: ReviewState, fields: ManualEventFields): { item: It
 
   const saved = st.storage.addManualEvent(input);
   const item = itemFromManualEvent(saved, st.manualSource, st.manualSource.fallback_link);
+  item.event_timing = "upcoming"; // the form only takes a start in the future
   st.candidates = rankItems([...st.candidates.map((c) => c.item), item], now(st));
 
   const r = st.reminder;

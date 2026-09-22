@@ -51,10 +51,23 @@ export interface Item {
    * its main link points elsewhere. For the curator's list only; never rendered into a newsletter.
    */
   message_link?: string;
+  /**
+   * Events only: whether the event was already held or still to come when it was fetched. Decided
+   * once, from the run's windows, so the list the curator saw and the newsletter built days later
+   * agree. Absent on events from before this field existed, which count as upcoming.
+   */
+  event_timing?: EventTiming;
+}
+
+export type EventTiming = "past" | "upcoming";
+
+/** An event already held when it was fetched: listed and printed apart from what is coming up. */
+export function isPastEvent(it: Pick<Item, "type" | "event_timing">): boolean {
+  return it.type === "event" && it.event_timing === "past";
 }
 
 /** The optional fields stored together as one JSON column. */
-export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline", "message_link"] as const;
+export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline", "message_link", "event_timing"] as const;
 
 export interface RelatedLink {
   source: string;
@@ -100,6 +113,9 @@ export function validateItem(value: unknown): ValidationResult {
   }
   for (const key of ["hold_note", "byline"] as const) {
     if (it[key] !== undefined && typeof it[key] !== "string") errors.push(`${key} must be a string when present`);
+  }
+  if (it.event_timing !== undefined && it.event_timing !== "past" && it.event_timing !== "upcoming") {
+    errors.push("event_timing must be past or upcoming when present");
   }
   if (it.message_link !== undefined && (typeof it.message_link !== "string" || !isAbsoluteHttpUrl(it.message_link))) {
     errors.push("message_link must be an absolute http(s) link when present");

@@ -6,6 +6,7 @@ import { MemoryAlerter } from "../src/alerts.js";
 import { resolveClock } from "../src/clock.js";
 import type { Config } from "../src/config.js";
 import { runWeek } from "../src/run-week.js";
+import { buildDraft, candidateGroups, currentSelection, setSelection, startReview, type ReviewState } from "../src/review/review.js";
 import { SqliteStorage } from "../src/storage.js";
 
 const config: Config = {
@@ -119,6 +120,40 @@ describe("runWeek on a monthly cadence (integration)", () => {
     expect(s.drafts.every((d) => d.verified)).toBe(true);
     const md = readFileSync(s.drafts[0]!.file_md, "utf8");
     expect(md).toContain("Fall Mixer");
+  });
+
+  it("keeps last month's events apart from this month's, from the run through a draft built days later", async () => {
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {});
+    const s = await runWeek({ config: { ...config, cadence: "monthly" }, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    const byTitle = (t: string) => s.candidates.find((c) => c.item.title === t)!.item;
+    expect(byTitle("Demo Night").event_timing).toBe("past");
+    expect(byTitle("Fall Mixer").event_timing).toBe("upcoming");
+    // Last month's event is offered, not pre-ticked.
+    expect(s.preselected_ids).toContain(byTitle("Fall Mixer").id);
+    expect(s.preselected_ids).not.toContain(byTitle("Demo Night").id);
+
+    // The review Claude drives: the list is grouped, and Bader ticks the past event too.
+    const st: ReviewState = {
+      candidates: [], timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: {}, campaigns: new Set(),
+      session: storage, week: "2026-10", layout: "events-first", now: () => new Date("2026-10-05T14:00:00Z"),
+    };
+    startReview(st, { candidates: s.candidates, preselectedIds: s.preselected_ids, firstWorkday: s.first_workday, timeZone: config.timezone, clockLabel: clock.label, sourceNotes: [] });
+    const groups = candidateGroups(st);
+    expect(groups.upcomingEvents.map((c) => c.item.title)).toEqual(["Fall Mixer"]);
+    expect(groups.pastEvents.map((c) => c.item.title)).toEqual(["Demo Night"]);
+    setSelection(st, [...currentSelection(st), byTitle("Demo Night").id]);
+
+    // Built on 5 October, four days after the run: nothing has moved between sections.
+    const built = buildDraft(st, new MemoryAlerter());
+    if (!built.ok) throw new Error("expected a verified draft");
+    const md = built.draft.markdown;
+    const up = md.indexOf("## Upcoming events");
+    const past = md.indexOf("## Last month at Volta");
+    expect(up).toBeGreaterThanOrEqual(0);
+    expect(past).toBeGreaterThan(up);
+    expect(md.indexOf("Fall Mixer", up)).toBeLessThan(past);
+    expect(md.indexOf("Demo Night", past)).toBeGreaterThan(past);
+    expect(md).toMatch(/Held: Thursday, September 17/);
   });
 
   it("with the same sources, a weekly run still reads only the last 7 days and the next 14", async () => {

@@ -104,6 +104,7 @@ export class IcsFetcher implements Fetcher {
         raw_excerpt: collapseWhitespace([title, location ? `Location: ${location}.` : "", description].filter(Boolean).join(" ")),
       };
       if (location) item.location = location;
+      item.event_timing = held ? "past" : "upcoming";
       items.push(item);
     }
 

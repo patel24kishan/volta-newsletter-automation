@@ -32,7 +32,9 @@ export class ManualEventsFetcher implements Fetcher {
     const warnings: string[] = [];
     const items: Item[] = events.map((e) => {
       if (!e.link) warnings.push(`manually added event has no link of its own, linked to ${fallback}: "${e.title}"`);
-      return itemFromManualEvent(e, source, fallback);
+      const item = itemFromManualEvent(e, source, fallback);
+      item.event_timing = Date.parse(e.starts_at) < upcoming.from.getTime() ? "past" : "upcoming";
+      return item;
     });
     return { source: source.id, items, warnings, bytes: JSON.stringify(events).length };
   }

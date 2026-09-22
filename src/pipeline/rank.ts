@@ -3,7 +3,7 @@
  * Score: type weight + recency (news, posts) or imminence (events) + summary present + confidence
  * + one point per related source (a story two sources carried matters more).
  */
-import type { Item } from "../schema.js";
+import { isPastEvent, type Item } from "../schema.js";
 
 export interface RankedItem {
   item: Item;
@@ -20,7 +20,10 @@ export function rankItems(items: Item[], now: Date): RankedItem[] {
     reasons.push(`${item.type} +${TYPE_WEIGHT[item.type] ?? 1}`);
 
     const days = (new Date(item.date).getTime() - now.getTime()) / 86_400_000;
-    if (item.type === "event") {
+    if (isPastEvent(item)) {
+      // A look back at an event already held: listed for the curator, never outranking what is ahead.
+      reasons.push(`held ${Math.max(0, Math.round(-days))}d ago +0`);
+    } else if (item.type === "event") {
       const imminence = days <= 3 ? 3 : days <= 7 ? 2 : 1;
       score += imminence;
       reasons.push(`in ${Math.max(0, Math.round(days))}d +${imminence}`);

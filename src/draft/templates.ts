@@ -7,7 +7,7 @@
  * Sections with nothing say so instead of vanishing (constraint 5).
  */
 import { partsInZone } from "../clock.js";
-import type { Item } from "../schema.js";
+import { type Item, isPastEvent } from "../schema.js";
 import { verifyDraft, type VerifyResult } from "../pipeline/verify.js";
 
 export interface Draft {
@@ -31,6 +31,8 @@ export interface DraftOptions {
 const T = {
   title: "This week at Volta",
   events: "Upcoming events",
+  pastEvents: "Last month at Volta",
+  held: "Held",
   news: "In the news",
   linkedin: "From Volta on LinkedIn",
   insights: "Key insights",
@@ -52,7 +54,7 @@ const T = {
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
-  T.title, T.events, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
+  T.title, T.events, T.pastEvents, T.held, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
   T.brief, T.standard, T.eventsFirst, T.subjectPrefix, "Volta", "LinkedIn", "Halifax",
   ...["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => T.none(s)),
   // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
@@ -83,19 +85,21 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   });
 }
 
-interface Groups { events: Item[]; news: Item[]; linkedin: Item[]; members: Item[]; ceo: Item[] }
+/** Upcoming events and events already held are kept apart, each in its own section. */
+interface Groups { events: Item[]; pastEvents: Item[]; news: Item[]; linkedin: Item[]; members: Item[]; ceo: Item[] }
 
 function groupItems(items: Item[]): Groups {
-  const g: Groups = { events: [], news: [], linkedin: [], members: [], ceo: [] };
+  const g: Groups = { events: [], pastEvents: [], news: [], linkedin: [], members: [], ceo: [] };
   for (const it of items) {
-    if (it.type === "event") g.events.push(it);
+    if (isPastEvent(it)) g.pastEvents.push(it);
+    else if (it.type === "event") g.events.push(it);
     else if (it.type === "news") g.news.push(it);
     else if (it.type === "ceo_update") g.ceo.push(it);
     else if (it.type === "member_social") g.members.push(it); // members' own updates are not Volta's LinkedIn
     else g.linkedin.push(it);
   }
   g.events.sort((a, b) => a.date.localeCompare(b.date));
-  for (const k of ["news", "linkedin", "members", "ceo"] as const) g[k].sort((a, b) => b.date.localeCompare(a.date));
+  for (const k of ["pastEvents", "news", "linkedin", "members", "ceo"] as const) g[k].sort((a, b) => b.date.localeCompare(a.date));
   return g;
 }
 
@@ -111,6 +115,14 @@ function section(title: string, list: Item[], render: (it: Item) => Block): Bloc
   return blocks;
 }
 
+/**
+ * The look back at events already held. Only when one was chosen: a weekly newsletter never has
+ * one, and a month with none to recall is better without an empty heading.
+ */
+function pastSection(g: Groups, render: (it: Item) => Block): Block[] {
+  return g.pastEvents.length ? section(T.pastEvents, g.pastEvents, render) : [];
+}
+
 /** Key insights appears only when a member update was selected; the other sections always show. */
 function insightsSection(g: Groups, render: (it: Item) => Block): Block[] {
   return g.members.length ? section(T.insights, g.members, render) : [];
@@ -118,11 +130,11 @@ function insightsSection(g: Groups, render: (it: Item) => Block): Block[] {
 
 function briefBlocks(g: Groups, o: DraftOptions): Block[] {
   const line = (it: Item): Block => {
-    const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [whenLine(it, o.timeZone)] : [], summary: "", links: draftLinks(it) };
+    const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [isPastEvent(it) ? `${T.held} ${whenLine(it, o.timeZone)}` : whenLine(it, o.timeZone)] : [], summary: "", links: draftLinks(it) };
     if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
     return block;
   };
-  return [...section(T.events, g.events, line), ...insightsSection(g, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
+  return [...section(T.events, g.events, line), ...pastSection(g, line), ...insightsSection(g, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
 }
 
 /** Standard leads with the stories: Key insights first, then events, news and LinkedIn. */
@@ -131,6 +143,7 @@ function standardBlocks(g: Groups, o: DraftOptions): Block[] {
     { kind: "p", text: T.intro },
     ...insightsSection(g, (it) => fullItem(it, o)),
     ...section(T.events, g.events, (it) => fullItem(it, o)),
+    ...pastSection(g, (it) => fullItem(it, o)),
     ...section(T.news, g.news, (it) => fullItem(it, o)),
     ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
     ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
@@ -144,6 +157,7 @@ function standardBlocks(g: Groups, o: DraftOptions): Block[] {
 function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
   return [
     ...section(T.events, g.events, (it) => fullItem(it, o)),
+    ...pastSection(g, (it) => fullItem(it, o)),
     ...insightsSection(g, (it) => fullItem(it, o)),
     ...section(T.news, g.news, (it) => fullItem(it, o)),
     ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
@@ -154,7 +168,7 @@ function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
 function fullItem(it: Item, o: DraftOptions): Block {
   const meta: string[] = [];
   if (it.type === "event") {
-    meta.push(`${T.when}: ${whenLine(it, o.timeZone)}`);
+    meta.push(`${isPastEvent(it) ? T.held : T.when}: ${whenLine(it, o.timeZone)}`);
     if (it.location) meta.push(`${T.where}: ${it.location}`);
   }
   if (it.byline) meta.push(`${T.withPerson} ${it.byline}`);

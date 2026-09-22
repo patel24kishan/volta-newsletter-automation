@@ -16,7 +16,7 @@ import type { FetchContext } from "./fetchers/types.js";
 import { dedupeItems } from "./pipeline/dedupe.js";
 import { rankItems, type RankedItem } from "./pipeline/rank.js";
 import { ExtractiveSummarizer } from "./pipeline/summarize.js";
-import type { Item } from "./schema.js";
+import { isPastEvent, type Item } from "./schema.js";
 import { firstWorkdayOfWeek, reminderDue, type FirstWorkday } from "./schedule/first-workday.js";
 import { windowsFor } from "./schedule/period.js";
 import type { Storage } from "./storage.js";
@@ -109,7 +109,8 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   // Bader, but is never pre-ticked and never written into a pre-generated draft, however quiet
   // the week. Only a person can put it in. Ranking alone would not guarantee that.
   const n = o.preselect ?? 10;
-  const preselected = candidates.filter((c) => !c.item.requires_review).slice(0, n).map((c) => c.item);
+  // Held items and last month's events are listed but never pre-ticked: each is the curator's call.
+  const preselected = candidates.filter((c) => !c.item.requires_review && !isPastEvent(c.item)).slice(0, n).map((c) => c.item);
   const drafts = buildDrafts(preselected, { timeZone: config.timezone, layouts: [config.draft_layout] });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {
