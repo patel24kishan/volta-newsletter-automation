@@ -20,6 +20,8 @@ export interface NewManualEvent {
   description?: string;
   /** Blank means "use the source's fallback_link". */
   link?: string;
+  /** An https image link or the full path of an image file on this computer (src/images.ts). */
+  image?: string;
 }
 
 export interface ManualEvent {
@@ -29,6 +31,8 @@ export interface ManualEvent {
   location: string;
   description: string;
   link: string;
+  /** "" when the event has no image. */
+  image: string;
   created_at: string;
 }
 
@@ -44,6 +48,8 @@ export interface ManualEventFields {
   location?: string;
   description?: string;
   link?: string;
+  /** An https image link or the full path of an image file on this computer. */
+  image?: string;
 }
 
 /**
@@ -62,6 +68,7 @@ export function manualEventFromFields(f: ManualEventFields, timeZone: string): N
   if (f.location) e.location = f.location;
   if (f.description) e.description = f.description;
   if (f.link) e.link = f.link;
+  if (f.image) e.image = f.image;
   return e;
 }
 
@@ -108,5 +115,6 @@ export function itemFromManualEvent(e: ManualEvent, source: Pick<SourceConfig, "
     raw_excerpt: collapseWhitespace([e.title, e.location ? `Location: ${e.location}.` : "", e.description].filter(Boolean).join(" ")),
   };
   if (e.location) item.location = e.location;
+  if (e.image) item.image = e.image;
   return item;
 }

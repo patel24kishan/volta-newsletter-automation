@@ -62,6 +62,11 @@ export interface Item {
    * is built from, never stored on the item itself: the source text stays as it was fetched.
    */
   edited_fields?: string[];
+  /**
+   * Events the curator added: an https image link or the full path of an image file on their
+   * computer. Shown in the email under the title; never part of the text the verifier reads.
+   */
+  image?: string;
 }
 
 export type EventTiming = "past" | "upcoming";
@@ -72,7 +77,7 @@ export function isPastEvent(it: Pick<Item, "type" | "event_timing">): boolean {
 }
 
 /** The optional fields stored together as one JSON column. */
-export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline", "message_link", "event_timing"] as const;
+export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline", "message_link", "event_timing", "image"] as const;
 
 export interface RelatedLink {
   source: string;
@@ -116,7 +121,7 @@ export function validateItem(value: unknown): ValidationResult {
     const v = it[key];
     if (v !== undefined && (!Array.isArray(v) || !v.every((s) => typeof s === "string"))) errors.push(`${key} must be an array of strings when present`);
   }
-  for (const key of ["hold_note", "byline"] as const) {
+  for (const key of ["hold_note", "byline", "image"] as const) {
     if (it[key] !== undefined && typeof it[key] !== "string") errors.push(`${key} must be a string when present`);
   }
   if (it.event_timing !== undefined && it.event_timing !== "past" && it.event_timing !== "upcoming") {

@@ -58,7 +58,9 @@ describe("checking an edit before it is saved", () => {
     expect(normalizeEdit(mixer, "starts_at", "Oct 23 7pm", TZ)).toEqual({ error: expect.stringMatching(/YYYY-MM-DD HH:MM/) });
     expect(normalizeEdit(mixer, "starts_at", "2026-02-30 19:00", TZ)).toEqual({ error: "2026-02-30 is not a real date." });
     expect(normalizeEdit(story, "location", "Volta", TZ)).toEqual({ error: "only an event has a location" });
-    expect(normalizeEdit(mixer, "title", "Fall Party", TZ)).toEqual({ error: expect.stringMatching(/title cannot be edited/) });
+    // A sourced event keeps the title its source gave it; only an event Bader added can be retitled.
+    expect(normalizeEdit(mixer, "title", "Fall Party", TZ)).toEqual({ error: expect.stringMatching(/only be changed on an event you added; this one comes from volta-calendar/) });
+    expect(normalizeEdit(mixer, "headline", "x", TZ)).toEqual({ error: expect.stringMatching(/headline cannot be edited/) });
     expect(normalizeEdit(mixer, "summary", "x".repeat(601), TZ)).toEqual({ error: expect.stringMatching(/under 600/) });
   });
 });

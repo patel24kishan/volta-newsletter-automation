@@ -155,7 +155,7 @@ describe("config for the manual source", () => {
 
 describe("dedupe treats hand-added events carefully", () => {
   const manual = (title: string, starts: string, id = "me_1"): ManualEvent =>
-    ({ id, title, starts_at: starts, location: "Volta", description: `${title} at Volta.`, link: "", created_at: NOW });
+    ({ id, title, starts_at: starts, location: "Volta", description: `${title} at Volta.`, link: "", image: "", created_at: NOW });
   const asItem = (e: ManualEvent) => itemFromManualEvent(e, SOURCE, SOURCE.fallback_link!);
 
   it("never merges two different events that share the fallback link", () => {
@@ -194,7 +194,7 @@ describe("a draft containing a hand-added event", () => {
   const draftFor = (e: ManualEvent) => buildDrafts([itemFromManualEvent(e, SOURCE, SOURCE.fallback_link!)], { timeZone: TZ })[1]!;
 
   it("passes the no-fabrication verifier, saying only what was typed", () => {
-    const d = draftFor({ id: "me_1", title: "Demo Night", starts_at: "2026-09-25T22:00:00.000Z", location: "Volta, Halifax", description: "An evening of founder demos.", link: "", created_at: NOW });
+    const d = draftFor({ id: "me_1", title: "Demo Night", starts_at: "2026-09-25T22:00:00.000Z", location: "Volta, Halifax", description: "An evening of founder demos.", link: "", image: "", created_at: NOW });
     expect(d.verification.violations).toEqual([]);
     expect(d.markdown).toContain("When: Friday, September 25, 7:00 pm");
     expect(d.markdown).toContain("Where: Volta, Halifax");
@@ -203,7 +203,7 @@ describe("a draft containing a hand-added event", () => {
 
   it("still verifies for an event on the day the clocks change", () => {
     // 2026-11-01 is the end of daylight time in Halifax: 2pm ADT is 17:00Z, 2pm AST is 18:00Z.
-    const d = draftFor({ id: "me_2", title: "November Meetup", starts_at: "2026-11-01T18:00:00.000Z", location: "Volta", description: "A meetup after the clocks change.", link: "", created_at: NOW });
+    const d = draftFor({ id: "me_2", title: "November Meetup", starts_at: "2026-11-01T18:00:00.000Z", location: "Volta", description: "A meetup after the clocks change.", link: "", image: "", created_at: NOW });
     expect(d.verification.violations).toEqual([]);
     expect(d.markdown).toContain("When: Sunday, November 1, 2:00 pm");
   });

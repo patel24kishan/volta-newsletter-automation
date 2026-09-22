@@ -8,6 +8,7 @@
  */
 import { partsInZone } from "../clock.js";
 import type { Cadence } from "../config.js";
+import { isImageUrl } from "../images.js";
 import { type Item, isPastEvent } from "../schema.js";
 import { verifyDraft, type VerifyResult } from "../pipeline/verify.js";
 
@@ -29,6 +30,12 @@ export interface DraftOptions {
   layouts?: Draft["id"][];
   /** Says "this month" rather than "this week" when the newsletter is monthly. Weekly when absent. */
   cadence?: Cadence;
+  /**
+   * Where an item's image is loaded from: its https link as it is, a local file as an inline
+   * preview or, once approved, the email platform's hosted copy. Returning undefined leaves the
+   * image out. By default only https images are shown.
+   */
+  imageSrc?: (ref: string) => string | undefined;
 }
 
 const T = {
@@ -73,7 +80,19 @@ export const TEMPLATE_PHRASES: string[] = [
 
 type Block =
   | { kind: "h1" | "h2" | "p"; text: string }
-  | { kind: "item"; title: string; meta: string[]; summary: string; bullets?: string[]; links: { label: string; href: string }[] };
+  | { kind: "item"; title: string; meta: string[]; summary: string; bullets?: string[]; links: { label: string; href: string }[]; image?: { src: string; alt: string } };
+
+/** The image an item shows, if any: in the email only, never in the text the verifier reads. */
+function imageOf(it: Item, o: DraftOptions): { src: string; alt: string } | undefined {
+  if (!it.image) return undefined;
+  const src = o.imageSrc ? o.imageSrc(it.image) : isImageUrl(it.image) ? it.image : undefined;
+  return src ? { src, alt: it.title } : undefined;
+}
+
+function withImage(block: Block, it: Item, o: DraftOptions): Block {
+  const image = block.kind === "item" ? imageOf(it, o) : undefined;
+  return image && block.kind === "item" ? { ...block, image } : block;
+}
 
 export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   const groups = groupItems(items);
@@ -143,7 +162,7 @@ function briefBlocks(g: Groups, o: DraftOptions): Block[] {
   const line = (it: Item): Block => {
     const block: Block = { kind: "item", title: it.title, meta: it.type === "event" ? [isPastEvent(it) ? `${T.held} ${whenLine(it, o.timeZone)}` : whenLine(it, o.timeZone)] : [], summary: "", links: draftLinks(it) };
     if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
-    return block;
+    return withImage(block, it, o);
   };
   return [...section(T.events, g.events, line, o), ...pastSection(g, line, o), ...insightsSection(g, line, o), ...section(T.news, g.news, line, o), ...section(T.linkedin, g.linkedin, line, o), ...(g.ceo.length ? section(T.ceo, g.ceo, line, o) : [])];
 }
@@ -186,8 +205,8 @@ function fullItem(it: Item, o: DraftOptions): Block {
   const links = draftLinks(it);
   // An item with insights is summarised by them. Its `summary` is the line shown while choosing,
   // which for a founder update is advice to the editor and must not be printed for readers.
-  if (it.insights?.length) return { kind: "item", title: it.title, meta, summary: "", bullets: it.insights, links };
-  return { kind: "item", title: it.title, meta, summary: it.summary, links };
+  if (it.insights?.length) return withImage({ kind: "item", title: it.title, meta, summary: "", bullets: it.insights, links }, it, o);
+  return withImage({ kind: "item", title: it.title, meta, summary: it.summary, links }, it, o);
 }
 
 function primaryLink(it: Item): { label: string; href: string }[] {
@@ -321,9 +340,14 @@ function htmlRow(b: Block): string {
   const links = b.links.length
     ? `<div style="margin-top:8px;font-size:14px;line-height:22px;">${b.links.map((l) => `<a href="${esc(l.href)}" style="color:${C.accent};text-decoration:underline;">${esc(l.label)}</a>`).join(" · ")}</div>`
     : "";
+  // Fits the 600px column (520px inside the padding) and scales down on a phone. The alt text is the
+  // title, so a reader whose client blocks images, or who uses a screen reader, still knows what it is.
+  const image = b.image
+    ? `<div style="margin-top:10px;"><img src="${esc(b.image.src)}" alt="${esc(b.image.alt)}" width="500" style="display:block;width:100%;max-width:500px;height:auto;border:0;"></div>`
+    : "";
   return `<tr><td class="pad" style="padding:16px 40px 4px 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>` +
     `<td style="padding-left:16px;border-left:3px solid ${C.rule};font-family:${SANS};font-size:16px;line-height:24px;color:${C.ink};">` +
-    `<strong>${esc(b.title)}</strong>${meta}${summary}${bullets}${links}</td></tr></table></td></tr>`;
+    `<strong>${esc(b.title)}</strong>${image}${meta}${summary}${bullets}${links}</td></tr></table></td></tr>`;
 }
 
 function htmlTextRow(kind: "h1" | "h2" | "p", text: string): string {

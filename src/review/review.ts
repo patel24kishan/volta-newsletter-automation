@@ -22,6 +22,7 @@ import { isPastEvent, type Item } from "../schema.js";
 import type { ReminderInput } from "../surface/blocks.js";
 import type { SurfaceState } from "../surface/handlers.js";
 import { persistSession, type DraftRecord } from "../surface/session.js";
+import { checkImage, dataUri, isImageUrl, readLocalImage } from "../images.js";
 import { applyEdits, EDIT_FIELD_LABEL, EDIT_FIELDS, isEditField, normalizeEdit, type EditField } from "./edits.js";
 
 /** The review's state. The same shape the Slack surface uses, so both read one saved review. */
@@ -108,6 +109,11 @@ export function addEvent(st: ReviewState, fields: ManualEventFields): { item: It
   if (!st.storage || !st.manualSource) throw new Error("no manual events source is configured, so an event cannot be added");
   const input = manualEventFromFields(fields, st.timeZone);
   const errors = validateManualEvent(input, now(st));
+  if (input.image !== undefined) {
+    const img = checkImage(input.image);
+    if ("error" in img) errors.image = img.error;
+    else input.image = img.ref;
+  }
   if (Object.keys(errors).length) return { errors };
 
   const saved = st.storage.addManualEvent(input);
@@ -190,7 +196,8 @@ export function buildDraft(st: ReviewState, alerter: Alerter, ids: string[] = cu
   const notes = notesFor(items);
   if (items.length === 0) return { ok: false, reason: "nothing-selected", notes };
 
-  const drafts = buildDrafts(items, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"], ...(st.cadence ? { cadence: st.cadence } : {}) });
+  // The preview shows a local image inline; the email gets a hosted copy at Approve.
+  const drafts = buildDrafts(items, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"], ...(st.cadence ? { cadence: st.cadence } : {}), imageSrc: previewImage });
   for (const d of drafts.filter((d) => !d.verification.ok)) {
     alerter.alert("error", `draft:${d.id}`, `withheld: ${d.verification.violations.map((v) => `${v.kind} "${v.value}"`).join(", ")}`, "inspect the items; the draft was not shown");
   }
@@ -204,6 +211,35 @@ export function buildDraft(st: ReviewState, alerter: Alerter, ids: string[] = cu
   st.drafts.set(key, { key, draft: d, items, ...(previewId ? { previewId } : {}) });
   persistSession(st);
   return { ok: true, key, draft: d, items, ...(previewUrl ? { previewUrl } : {}), notes };
+}
+
+/** An image for the preview: an https link as it is, a local file inline; left out if the file has gone. */
+function previewImage(ref: string): string | undefined {
+  if (isImageUrl(ref)) return ref;
+  try {
+    return dataUri(readLocalImage(ref));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The email as it will be sent: the approved draft rebuilt with every local image replaced by the
+ * platform's hosted copy, uploaded now. Nothing else changes, since the same items give the same
+ * text. A local image that cannot be uploaded (no upload on this platform) is left out rather
+ * than pointing subscribers at a file on the curator's computer.
+ */
+async function emailDraft(st: ReviewState, record: DraftRecord): Promise<Draft> {
+  const local = [...new Set(record.items.map((i) => i.image).filter((r): r is string => Boolean(r) && !isImageUrl(r!)))];
+  if (local.length === 0) return record.draft;
+  const hosted = new Map<string, string>();
+  const upload = st.publisher?.uploadImage?.bind(st.publisher);
+  if (upload) for (const ref of local) hosted.set(ref, await upload(readLocalImage(ref)));
+  const [d] = buildDrafts(record.items, {
+    timeZone: st.timeZone, layouts: [record.draft.id], ...(st.cadence ? { cadence: st.cadence } : {}),
+    imageSrc: (ref) => (isImageUrl(ref) ? ref : hosted.get(ref)),
+  });
+  return { ...record.draft, html: d!.html };
 }
 
 /** The draft waiting for approval, if any. */
@@ -242,7 +278,10 @@ export async function approve(st: ReviewState, key: string): Promise<ApproveResu
   assertLive(`create the ${st.publisher.platform} campaign`, st.env);
   let c: PublishedCampaign;
   try {
-    c = await st.publisher.publishDraft(d);
+    const email = await emailDraft(st, record);
+    // What is saved locally matches what the platform received.
+    writeFileSync(files.html, email.html, "utf8");
+    c = await st.publisher.publishDraft(email);
   } catch (e) {
     return { status: "failed", draft: d, files, held, platform: st.publisher.platform, error: e as Error };
   }

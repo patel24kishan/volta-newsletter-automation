@@ -111,6 +111,7 @@ export class SqliteStorage implements Storage {
         location TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
         link TEXT NOT NULL DEFAULT '',
+        image TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS manual_events_start ON manual_events(starts_at);
@@ -155,6 +156,9 @@ export class SqliteStorage implements Storage {
     for (const [column, type] of [["location", "TEXT"], ["related", "TEXT"], ["extra", "TEXT"]] as const) {
       if (!have.has(column)) this.db.exec(`ALTER TABLE items ADD COLUMN ${column} ${type}`);
     }
+    // Events added before images existed get an empty one.
+    const manual = new Set((this.db.prepare("PRAGMA table_info(manual_events)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!manual.has("image")) this.db.exec("ALTER TABLE manual_events ADD COLUMN image TEXT NOT NULL DEFAULT ''");
   }
 
   upsertItems(items: Item[]): number {
@@ -224,11 +228,12 @@ export class SqliteStorage implements Storage {
       location: collapseWhitespace(input.location ?? ""),
       description: collapseWhitespace(input.description ?? ""),
       link: (input.link ?? "").trim(),
+      image: (input.image ?? "").trim(),
       created_at: new Date().toISOString(),
     };
     this.db
-      .prepare("INSERT INTO manual_events (id, title, starts_at, location, description, link, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(event.id, event.title, event.starts_at, event.location, event.description, event.link, event.created_at);
+      .prepare("INSERT INTO manual_events (id, title, starts_at, location, description, link, image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(event.id, event.title, event.starts_at, event.location, event.description, event.link, event.image, event.created_at);
     return event;
   }
 
@@ -236,7 +241,7 @@ export class SqliteStorage implements Storage {
     const from = new Date(fromIso).toISOString();
     const to = new Date(toIso).toISOString();
     return this.db
-      .prepare("SELECT id, title, starts_at, location, description, link, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
+      .prepare("SELECT id, title, starts_at, location, description, link, image, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
       .all(from, to) as unknown as ManualEvent[];
   }
 

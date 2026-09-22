@@ -13,19 +13,25 @@
  * fields were changed (`edited_fields`), so nothing is silently reworded.
  */
 import { zonedToUtc } from "../clock.js";
+import { checkImage } from "../images.js";
+import { isManualItem, MANUAL_LIMITS } from "../manual-events.js";
 import { isAbsoluteHttpUrl, type Item } from "../schema.js";
 import type { CuratorEdit } from "../storage.js";
 import { collapseWhitespace } from "../text.js";
 
-export const EDIT_FIELDS = ["summary", "starts_at", "location", "link"] as const;
+/**
+ * What the curator can reword. `title` and `image` only on events the curator added: a sourced
+ * item keeps the title its source gave it, and only added events carry an image.
+ */
+export const EDIT_FIELDS = ["title", "summary", "starts_at", "location", "link", "image"] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
 
 /** What each field is called when Claude reads it back to the curator. */
 export const EDIT_FIELD_LABEL: Record<EditField, string> = {
-  summary: "description", starts_at: "date and time", location: "location", link: "link",
+  title: "title", summary: "description", starts_at: "date and time", location: "location", link: "link", image: "image",
 };
 
-export const EDIT_LIMITS = { summary: 600, location: 120 } as const;
+export const EDIT_LIMITS = { title: MANUAL_LIMITS.title, summary: 600, location: 120 } as const;
 
 export function isEditField(f: string): f is EditField {
   return (EDIT_FIELDS as readonly string[]).includes(f);
@@ -41,7 +47,18 @@ export function normalizeEdit(item: Item, field: string, value: string, timeZone
   if ((field === "starts_at" || field === "location") && item.type !== "event") {
     return { error: `only an event has a ${EDIT_FIELD_LABEL[field]}` };
   }
+  if ((field === "title" || field === "image") && !isManualItem(item)) {
+    return { error: `the ${EDIT_FIELD_LABEL[field]} can only be changed on an event you added; this one comes from ${item.source}` };
+  }
   switch (field) {
+    case "title":
+      if (!v) return { error: "The title cannot be empty." };
+      if (v.length > EDIT_LIMITS.title) return { error: `Keep the title under ${EDIT_LIMITS.title} characters.` };
+      return { value: v };
+    case "image": {
+      const img = checkImage(value);
+      return "error" in img ? img : { value: img.ref };
+    }
     case "summary":
       if (!v) return { error: "The description cannot be empty. To go back to the source's text, clear the edit instead." };
       if (v.length > EDIT_LIMITS.summary) return { error: `Keep the description under ${EDIT_LIMITS.summary} characters.` };
@@ -90,6 +107,14 @@ export function applyEdits(items: Item[], edits: CuratorEdit[], runAt: Date): It
     const fields: string[] = [];
     for (const e of mine) {
       switch (e.field as EditField) {
+        case "title":
+          if (!isManualItem(copy)) continue;
+          copy.title = e.value;
+          break;
+        case "image":
+          if (!isManualItem(copy)) continue;
+          copy.image = e.value;
+          break;
         case "summary":
           copy.summary = e.value;
           copy.needs_summary = false;

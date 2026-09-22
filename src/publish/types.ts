@@ -21,4 +21,9 @@ export interface Publisher {
   publishDraft(draft: Draft): Promise<PublishedCampaign>;
   /** Sends the campaign to its audience. */
   send(campaignId: string): Promise<void>;
+  /**
+   * Hosts an image file with the platform and returns its public URL, so the email never points at
+   * a file on the curator's computer. Optional: without it, local images are left out of the email.
+   */
+  uploadImage?(file: { name: string; mime: string; bytes: Buffer }): Promise<string>;
 }

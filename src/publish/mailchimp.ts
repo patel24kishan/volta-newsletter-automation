@@ -3,6 +3,7 @@
  *   POST /campaigns                 create a regular campaign addressed to the audience id
  *   PUT  /campaigns/{id}/content    set the HTML
  *   POST /campaigns/{id}/actions/send
+ *   POST /file-manager/files        host an image the curator attached to an event
  * The data centre comes from the API key suffix ("-us21"). Auth is HTTP Basic with the key.
  * Recipient addresses never pass through here (constraint 9).
  */
@@ -54,6 +55,12 @@ export class MailchimpPublisher implements Publisher {
     }, "create campaign")) as { id: string; web_id: number };
     await this.call("PUT", `/campaigns/${created.id}/content`, { html: draft.html }, "set campaign content");
     return { id: created.id, editUrl: `https://${this.dc}.admin.mailchimp.com/campaigns/edit?id=${created.web_id}`, platform: this.platform };
+  }
+
+  async uploadImage(file: { name: string; mime: string; bytes: Buffer }): Promise<string> {
+    const r = (await this.call("POST", "/file-manager/files", { name: file.name, file_data: file.bytes.toString("base64") }, "upload image")) as { full_size_url?: string };
+    if (!r.full_size_url) throw new MailchimpError(200, "the response had no full_size_url for the image", "upload image");
+    return r.full_size_url;
   }
 
   async send(campaignId: string): Promise<void> {
