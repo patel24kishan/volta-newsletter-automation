@@ -72,7 +72,8 @@ export function greetingText(f: ReminderFacts): string {
     "Needs your attention:",
     ...(attention.length ? attention : ["Nothing needs attention."]),
     "",
-    "What would you like to do? You can see the full list, change what's ticked, add an event, or change any wording, and then I'll build the draft with a preview.",
+    // The reminder runs as a scheduled task, which cannot show the review panel; a normal chat can.
+    `To review it, open a new chat and say: "Show me ${name}'s newsletter." You'll get the list with checkboxes, and can tick items, change wording, add events and build the draft there.`,
   ].join("\n");
 }
 

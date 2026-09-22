@@ -30,7 +30,8 @@ describe("the first-workday greeting", () => {
     expect(t.split("\n")[0]).toBe("Good morning Bader. October's newsletter is prepared.");
     expect(t).toContain("- Upcoming events: 1\n- Last month's events: 1\n- News and updates: 2");
     expect(t).toContain("- Pre-ticked: 2: Fall Mixer; Volta launches a program");
-    expect(t).toMatch(/What would you like to do\?/);
+    // Bader is sent to a normal chat, where the review panel opens.
+    expect(t.split("\n").at(-1)).toBe("To review it, open a new chat and say: \"Show me October's newsletter.\" You'll get the list with checkboxes, and can tick items, change wording, add events and build the draft there.");
   });
 
   it("lists every source that needs a look, and every held item with its label and reason", () => {
