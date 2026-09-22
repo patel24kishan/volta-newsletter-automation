@@ -18,6 +18,7 @@ import { rankItems, type RankedItem } from "./pipeline/rank.js";
 import { ExtractiveSummarizer } from "./pipeline/summarize.js";
 import type { Item } from "./schema.js";
 import { firstWorkdayOfWeek, reminderDue, type FirstWorkday } from "./schedule/first-workday.js";
+import { windowsFor } from "./schedule/period.js";
 import type { Storage } from "./storage.js";
 
 export interface RunOptions {
@@ -57,14 +58,16 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   const now = clock.now();
   mkdirSync(join(o.outDir, "drafts"), { recursive: true });
 
-  // 1. Fetch (in parallel; each source reports independently)
+  // 1. Fetch (in parallel; each source reports independently). The windows are worked out once,
+  //    so every source reads the same span of time.
+  const windows = windowsFor(now, config);
   const enabled = config.sources.filter((s) => s.enabled);
   const results = await Promise.all(
     enabled.map(async (s) => {
       const f = fetcherFor(s.kind);
       if (!f) return { s, r: undefined };
       const ctx: FetchContext = {
-        config, clock, storage,
+        config, clock, storage, windows,
         ...(o.fetchText ? { fetchText: o.fetchText } : {}),
         ...(o.slackApi ? { slackApi: o.slackApi } : {}),
         ...(o.env ? { env: o.env } : {}),

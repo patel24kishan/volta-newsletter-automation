@@ -31,17 +31,26 @@ export interface SourceConfig {
 export type DraftLayout = "brief" | "standard" | "events-first";
 export const DRAFT_LAYOUTS: DraftLayout[] = ["brief", "standard", "events-first"];
 
+/** How often the newsletter goes out. See src/schedule/period.ts for what each one fetches. */
+export type Cadence = "weekly" | "monthly";
+export const CADENCES: Cadence[] = ["weekly", "monthly"];
+
 export interface Config {
   timezone: string;
   /** Which layout the newsletter is built in. Changing it needs no deploy. */
   draft_layout: DraftLayout;
+  /**
+   * How often the newsletter goes out. Optional so older configs keep loading: absent means weekly.
+   * Monthly goes out on the first workday of the month and reads by calendar month, not day counts.
+   */
+  cadence?: Cadence;
   /** Day the newsletter goes out, e.g. "monday". Shifts by the holiday rule. */
   send_day: string;
   /** Local time the reminder must be delivered by, "HH:MM". */
   reminder_time: string;
-  /** Days of content to look back. */
+  /** Days of content to look back (weekly cadence). */
   content_window_days: number;
-  /** Days of events to look ahead. */
+  /** Days of events to look ahead (weekly cadence). */
   events_window_days: number;
   /** Terms an item must mention to count as relevant (case-insensitive). */
   watchlist: string[];
@@ -52,6 +61,11 @@ export interface Config {
 }
 
 export class ConfigError extends Error {}
+
+/** The cadence a config asks for; weekly when it does not say. */
+export function cadenceOf(config: Pick<Config, "cadence">): Cadence {
+  return config.cadence ?? "weekly";
+}
 
 export async function loadConfig(path: string): Promise<Config> {
   let raw: string;
@@ -97,6 +111,9 @@ export function validateConfig(value: unknown, where = "config"): Config {
 
   if (typeof c.reminder_time === "string" && !/^\d{2}:\d{2}$/.test(c.reminder_time)) {
     errors.push("reminder_time must be HH:MM");
+  }
+  if (c.cadence !== undefined && !CADENCES.includes(c.cadence as Cadence)) {
+    errors.push(`cadence must be one of ${CADENCES.join(", ")} when present`);
   }
   if (!DRAFT_LAYOUTS.includes(c.draft_layout as DraftLayout)) {
     errors.push(`draft_layout must be one of ${DRAFT_LAYOUTS.join(", ")}`);

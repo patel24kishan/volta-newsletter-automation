@@ -1,6 +1,7 @@
 import type { Config, SourceConfig } from "../config.js";
 import type { Clock } from "../clock.js";
 import type { Item } from "../schema.js";
+import type { Windows } from "../schedule/period.js";
 import type { Storage } from "../storage.js";
 
 export interface FetchContext {
@@ -12,6 +13,11 @@ export interface FetchContext {
   fetchText?: (url: string) => Promise<string>;
   /** Overrides the Slack Web API for tests. */
   slackApi?: (method: string, params: Record<string, string>) => Promise<Record<string, unknown>>;
+  /**
+   * What each source reads, computed once per run from the cadence (src/schedule/period.ts).
+   * Absent means the fetcher falls back to the config's day counts from the clock.
+   */
+  windows?: Windows;
   /** Where credentials come from; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
