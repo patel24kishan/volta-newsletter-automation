@@ -33,11 +33,18 @@ import { describeWindow, periodOf, windowsFor } from "../schedule/period.js";
 import { whatIsDue } from "../schedule/scheduler.js";
 import type { SqliteStorage } from "../storage.js";
 import { REVIEW_LABEL } from "../surface/blocks.js";
+import { greetingText, missedText, nothingDueText } from "../review/reminder.js";
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
 import { isManualItem } from "../manual-events.js";
 import { PANEL_MIME, PANEL_URI, panelHtml } from "./panel.js";
 
 export const SERVER_NAME = "volta-newsletter";
+
+/** Once-per-period records for the reminder (storage table schedule_marks). */
+const REMINDER_TASK = "claude-reminder";
+const MISSED_TASK = "claude-reminder-missed";
+/** A greeting that started and never finished (the app closed mid-run) can be retried after this. */
+const CLAIM_MS = 10 * 60 * 1000;
 
 /** Read by Claude when it connects. Rules first: they are what keeps the newsletter honest. */
 export const INSTRUCTIONS = `Volta's newsletter, reviewed by its curator (Bader) in this chat.
@@ -115,6 +122,18 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   }
 
   const prepared = (st: ReviewState) => Boolean(st.reminder);
+
+  /** Fetch every source for the period and start (or refresh) its review. Keeps what Bader ticked on a refresh. */
+  async function prepareNow(st: ReviewState): Promise<RunSummary> {
+    const run = await d.runPeriod();
+    const ticked = currentSelection(st);
+    startReview(st, {
+      candidates: run.candidates, preselectedIds: prepared(st) ? ticked.filter((id) => run.candidates.some((c) => c.item.id === id)) : run.preselected_ids,
+      firstWorkday: run.first_workday, period: run.period, timeZone: tz, clockLabel: d.clock.label,
+      sourceNotes: run.sources.filter((s) => s.status !== "ok").map((s) => `${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`),
+    }, CLAUDE_CHANNEL);
+    return run;
+  }
   const notPrepared = () => text(`This ${periodWord}'s newsletter has not been prepared yet. Call prepare_month first.`, true);
 
   server.registerTool("newsletter_status", {
@@ -146,13 +165,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   }, async ({ force }) => {
     const st = await current();
     if (prepared(st) && !force) return text(`Already prepared: ${st.candidates.length} candidates. Use list_candidates, or force: true to fetch again.`);
-    const run = await d.runPeriod();
-    const ticked = currentSelection(st);
-    startReview(st, {
-      candidates: run.candidates, preselectedIds: prepared(st) ? ticked.filter((id) => run.candidates.some((c) => c.item.id === id)) : run.preselected_ids,
-      firstWorkday: run.first_workday, period: run.period, timeZone: tz, clockLabel: d.clock.label,
-      sourceNotes: run.sources.filter((s) => s.status !== "ok").map((s) => `${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`),
-    }, CLAUDE_CHANNEL);
+    const run = await prepareNow(st);
     const g = candidateGroups(st);
     const notes = run.sources.filter((s) => s.status !== "ok").map((s) => `- ${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`);
     return text([
@@ -160,6 +173,51 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       ...(notes.length ? ["Sources that need attention:", ...notes] : ["Every source answered."]),
       "Next: call list_candidates and show Bader the list, group by group, with its ticks.",
     ].join("\n"));
+  });
+
+  // Called by the scheduled task in Bader's Claude app every morning. The decision and the words are
+  // code, not prompt: the first line says what to do (GREETING, MISSED or NOTHING_DUE), and Bader is
+  // greeted once per period however many times the task runs, even if two runs overlap.
+  server.registerTool("monthly_reminder", {
+    title: "Monthly reminder",
+    description: `For the scheduled reminder. Decides whether this ${periodWord}'s newsletter is due, prepares it if so, and returns the greeting for Bader. The first line is GREETING, MISSED or NOTHING_DUE; show what follows it exactly as returned.`,
+  }, async () => {
+    const st = await current();
+    const now = d.clock.now();
+    const key = st.week!;
+    const greeted = Boolean(d.storage.getMark(REMINDER_TASK, key)?.done_at);
+    const decision = whatIsDue(now, d.config, { reminderSent: greeted });
+    const facts = { cadence: cadenceOf(d.config), periodKey: key, firstWorkday: decision.firstWorkday, reminderTime: d.config.reminder_time };
+    const quiet = (why: Parameters<typeof nothingDueText>[1]) => text(`NOTHING_DUE\n${nothingDueText(facts, why)}`);
+    switch (decision.reminder) {
+      case "not-yet": return quiet("not-yet");
+      case "sent": return quiet("already-greeted");
+      case "closed": return quiet("closed");
+      case "missed": {
+        if (d.storage.getMark(MISSED_TASK, key)?.done_at) return quiet("missed-already-said");
+        d.storage.claimMark(MISSED_TASK, key, now.toISOString(), CLAIM_MS);
+        d.storage.completeMark(MISSED_TASK, key, now.toISOString());
+        d.alerter.alert("error", "schedule", `the reminder for ${key} was never shown`, "Bader has been told; the month can still be prepared by asking");
+        return text(`MISSED\n${missedText(facts)}`);
+      }
+      case "due":
+      case "due-late": {
+        // Two runs at once (a catch-up and the morning run, say): only one greets.
+        if (!d.storage.claimMark(REMINDER_TASK, key, now.toISOString(), CLAIM_MS)) return quiet("already-greeted");
+        try {
+          if (!prepared(st)) await prepareNow(st);
+        } catch (e) {
+          d.storage.releaseMark(REMINDER_TASK, key);
+          throw e;
+        }
+        const greeting = greetingText({
+          ...facts, now, timeZone: tz, late: decision.reminder === "due-late",
+          groups: candidateGroups(st), ticked: currentSelection(st), sourceNotes: st.reminder?.input.sourceNotes ?? [],
+        });
+        d.storage.completeMark(REMINDER_TASK, key, now.toISOString());
+        return text(`GREETING\n${greeting}`);
+      }
+    }
   });
 
   // The review panel (an MCP App). Hosts that show apps render it for list_candidates; others

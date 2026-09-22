@@ -85,12 +85,13 @@ describe("the newsletter tools, as Claude uses them", () => {
   it("offers the tools with the rules as instructions, and takes no newsletter text where it must not", async () => {
     const c = await connect();
     const { tools } = await c.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "approve_draft", "build_draft", "edit_item", "list_candidates", "newsletter_status", "prepare_month", "send_campaign", "set_selection"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "approve_draft", "build_draft", "edit_item", "list_candidates", "monthly_reminder", "newsletter_status", "prepare_month", "send_campaign", "set_selection"]);
     expect(c.client.getInstructions()).toBe(INSTRUCTIONS);
     expect(INSTRUCTIONS).toMatch(/Never write newsletter text yourself/);
     // Building, approving and sending take ids only: Claude cannot hand them words to publish.
     const props = (n: string) => Object.keys((tools.find((t) => t.name === n)!.inputSchema.properties ?? {}) as object).sort();
     expect(props("build_draft")).toEqual([]);
+    expect(props("monthly_reminder")).toEqual([]); // the scheduled task cannot steer it
     expect(props("approve_draft")).toEqual(["draft_key"]);
     expect(props("send_campaign")).toEqual(["campaign_id", "confirm"]);
     await c.close();
