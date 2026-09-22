@@ -12,6 +12,15 @@ export class DryRunRefusal extends Error {
   }
 }
 
+/**
+ * Why the MCP server must not start, or undefined. Live with an overridden clock is refused, since
+ * a wrong date could send real mail, unless ALLOW_LIVE_WITH_DEMO_CLOCK=1 opts in for a live demo.
+ */
+export function liveClockProblem(env: NodeJS.ProcessEnv, clock: { overridden: boolean }): string | undefined {
+  if (!isLive(env) || !clock.overridden || env.ALLOW_LIVE_WITH_DEMO_CLOCK === "1") return undefined;
+  return "refusing to run live with the clock overridden (--now or DEMO_NOW). Set ALLOW_LIVE_WITH_DEMO_CLOCK=1 for a deliberate live demo.";
+}
+
 /** Call before any side effect that reaches a human or an external system. */
 export function assertLive(action: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!isLive(env)) throw new DryRunRefusal(action);

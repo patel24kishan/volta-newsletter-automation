@@ -3,7 +3,7 @@
  * says "this month". Halifax is UTC-3 in October (ADT).
  */
 import { describe, expect, it } from "vitest";
-import { loadConfig, type Config } from "../src/config.js";
+import { loadConfig, validateConfig, type Config } from "../src/config.js";
 import { buildDrafts } from "../src/draft/templates.js";
 import { rankItems } from "../src/pipeline/rank.js";
 import { startReview, type ReviewState } from "../src/review/review.js";
@@ -53,6 +53,24 @@ describe("when a monthly newsletter is due", () => {
     const d = whatIsDue(at("2026-12-28T12:00:00Z"), monthly, { reminderSent: false });
     expect(d.week).toBe("2026-12");
     expect(d.reminder).not.toBe("closed");
+  });
+
+  it("catches up for as many days as the config says, then gives up", () => {
+    const month = { ...monthly, catch_up_days: 31 };
+    // September's first workday is Tuesday 1 September; 22 September is inside a 31-day catch-up.
+    expect(whatIsDue(at("2026-09-22T16:00:00Z"), month, { reminderSent: false }).reminder).toBe("due-late");
+    expect(dueWindow(at("2026-09-22T16:00:00Z"), month).giveUpAt.toISOString()).toBe("2026-10-02T03:00:00.000Z");
+    // Without the setting, 7 days, as before.
+    expect(whatIsDue(at("2026-09-22T16:00:00Z"), monthly, { reminderSent: false }).reminder).toBe("missed");
+  });
+
+  it("only accepts a catch-up of 1 to 31 whole days", () => {
+    const base = {
+      timezone: TZ, draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
+      watchlist: ["Volta"], holiday_overrides: [], alert_recipients: [], sources: [{ id: "cal", kind: "ics", type: "event", url: "https://x.test/c.ics", enabled: true }],
+    };
+    expect(validateConfig({ ...base, catch_up_days: 31 }).catch_up_days).toBe(31);
+    for (const bad of [0, 32, 2.5, "7"]) expect(() => validateConfig({ ...base, catch_up_days: bad }), String(bad)).toThrow(/catch_up_days must be a whole number of days from 1 to 31/);
   });
 
   it("leaves the weekly rule as it was: Monday 08:30, given up at the end of Friday", () => {

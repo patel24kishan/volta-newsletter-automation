@@ -110,16 +110,16 @@ export function atLocal(date: string, hhmm: string, timeZone: string): Date {
 /**
  * When the period's newsletter is due: the first workday at the reminder time, and the moment after
  * which it is too late to send it at all. Weekly gives up at the end of Friday, since a weekend
- * reminder would be replaced by Monday's; monthly allows a week of catch-up after the first workday,
- * since the next chance would otherwise be a month away.
+ * reminder would be replaced by Monday's; monthly allows a week of catch-up after the first workday
+ * (`catch_up_days` in config), since the next chance would otherwise be a month away.
  */
-export function dueWindow(now: Date, config: PeriodConfig & Pick<Config, "reminder_time">): { period: Period; firstWorkday: FirstWorkday; dueAt: Date; giveUpAt: Date } {
+export function dueWindow(now: Date, config: PeriodConfig & Pick<Config, "reminder_time" | "catch_up_days">): { period: Period; firstWorkday: FirstWorkday; dueAt: Date; giveUpAt: Date } {
   const period = periodOf(now, config);
   const firstWorkday = firstWorkdayOfPeriod(now, config);
   const dueAt = atLocal(firstWorkday.date, config.reminder_time, config.timezone);
   const giveUpAt = period.cadence === "weekly"
     ? atLocal(addDays(period.key, 5), "00:00", config.timezone)
-    : atLocal(addDays(firstWorkday.date, 7), "00:00", config.timezone);
+    : atLocal(addDays(firstWorkday.date, config.catch_up_days ?? 7), "00:00", config.timezone);
   return { period, firstWorkday, dueAt, giveUpAt };
 }
 

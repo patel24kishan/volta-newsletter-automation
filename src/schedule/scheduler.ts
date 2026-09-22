@@ -35,7 +35,7 @@ export const LATE_AFTER_MS = 60 * 60 * 1000;
 /** A send claim older than this was abandoned by a process that died, and can be taken over. */
 export const CLAIM_TTL_MS = 10 * 60 * 1000;
 
-type ScheduleConfig = Pick<Config, "timezone" | "holiday_overrides" | "reminder_time" | "cadence">;
+type ScheduleConfig = Pick<Config, "timezone" | "holiday_overrides" | "reminder_time" | "cadence" | "catch_up_days">;
 
 /** What is due at `now`. Pure: the same inputs always give the same answer, whatever the server's timezone. */
 export function whatIsDue(now: Date, config: ScheduleConfig, state: { reminderSent: boolean }): Decision {

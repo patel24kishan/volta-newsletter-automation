@@ -68,7 +68,7 @@ describe("the first-workday greeting", () => {
 describe("the other answers", () => {
   it("tells Bader once, plainly, when a month's reminder was missed", () => {
     expect(missedText({ cadence: "monthly", periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30" }))
-      .toBe('Bader, the reminder for October\'s newsletter was due Thursday 1 October at 08:30 and could not be shown within a week, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month\'s newsletter".');
+      .toBe('Bader, the reminder for October\'s newsletter was due Thursday 1 October at 08:30 and could not be shown in time, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month\'s newsletter".');
   });
 
   it("explains a quiet day, for the task's log", () => {

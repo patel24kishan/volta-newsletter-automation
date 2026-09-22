@@ -48,6 +48,12 @@ export interface Config {
   send_day: string;
   /** Local time the reminder must be delivered by, "HH:MM". */
   reminder_time: string;
+  /**
+   * Monthly only: for how many days after the first workday a reminder that could not be shown
+   * (the computer was off, say) is still shown late. After that the month is marked missed.
+   * Optional; 7 when absent.
+   */
+  catch_up_days?: number;
   /** Days of content to look back (weekly cadence). */
   content_window_days: number;
   /** Days of events to look ahead (weekly cadence). */
@@ -109,6 +115,9 @@ export function validateConfig(value: unknown, where = "config"): Config {
   needStringArray("holiday_overrides");
   needStringArray("alert_recipients");
 
+  if (c.catch_up_days !== undefined && (!Number.isInteger(c.catch_up_days) || (c.catch_up_days as number) < 1 || (c.catch_up_days as number) > 31)) {
+    errors.push("catch_up_days must be a whole number of days from 1 to 31 when present");
+  }
   if (typeof c.reminder_time === "string" && !/^\d{2}:\d{2}$/.test(c.reminder_time)) {
     errors.push("reminder_time must be HH:MM");
   }

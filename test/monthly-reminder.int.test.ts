@@ -46,12 +46,12 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "volta-reminder-")); storage
 afterEach(() => { storage.close(); rmSync(dir, { recursive: true, force: true }); });
 
 /** One copy of the server, as the Claude app starts it; `runs` counts real fetches. */
-async function server(clock: Clock) {
+async function server(clock: Clock, cfg: Config = config) {
   let runs = 0;
   const alerter = new MemoryAlerter();
   const s = createNewsletterServer({
-    config, clock, storage, alerter, outDir: dir, env: { ALLOW_LIVE: "0" },
-    runPeriod: async () => { runs++; return runWeek({ config, clock, storage, alerter: new MemoryAlerter(), outDir: dir, fetchText: async (u) => BODIES[u] ?? "" }); },
+    config: cfg, clock, storage, alerter, outDir: dir, env: { ALLOW_LIVE: "0" },
+    runPeriod: async () => { runs++; return runWeek({ config: cfg, clock, storage, alerter: new MemoryAlerter(), outDir: dir, fetchText: async (u) => BODIES[u] ?? "" }); },
   });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "scheduled-task", version: "1" });
@@ -117,10 +117,21 @@ describe("the monthly reminder, morning by morning", () => {
     const app = await server(clock);
     const missed = await app.reminder();
     expect(firstLine(missed)).toBe("MISSED");
-    expect(missed).toContain("the reminder for October's newsletter was due Thursday 1 October at 08:30 and could not be shown within a week");
+    expect(missed).toContain("the reminder for October's newsletter was due Thursday 1 October at 08:30 and could not be shown in time");
     expect(app.runs()).toBe(0); // nothing prepared on its own that late
     expect(await app.reminder()).toBe("NOTHING_DUE\nOctober's reminder was missed, and Bader has already been told.");
     expect(app.alerter.sent.filter((a) => a.source === "schedule")).toHaveLength(1);
+    await app.close();
+  });
+
+  it("with a longer catch-up in the config, still greets three weeks late, and says how late", async () => {
+    const clock = new MovableClock(new Date("2026-09-22T16:00:00Z")); // Tuesday 22 September, 13:00
+    const app = await server(clock, { ...config, catch_up_days: 31 });
+    const greeting = await app.reminder();
+    expect(firstLine(greeting)).toBe("GREETING");
+    expect(greeting).toContain("Good afternoon Bader. September's newsletter is prepared. This reminder is late: it was due Tuesday 1 September at 08:30.");
+    expect(greeting).toContain("Show me September's newsletter.");
+    expect(app.runs()).toBe(1);
     await app.close();
   });
 

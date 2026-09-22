@@ -90,7 +90,7 @@ function describeSourceNote(note: string): string {
 /** Said once, when a period passed with no reminder at all (the computer was off all week, say). */
 export function missedText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime">): string {
   const name = periodName(f.periodKey, f.cadence);
-  return `Bader, the reminder for ${name}'s newsletter was due ${dayName(f.firstWorkday)} at ${f.reminderTime} and could not be shown within a week, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month's newsletter".`;
+  return `Bader, the reminder for ${name}'s newsletter was due ${dayName(f.firstWorkday)} at ${f.reminderTime} and could not be shown in time, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month's newsletter".`;
 }
 
 /** Why nothing is said today, for the task's log. Never shown to Bader. */

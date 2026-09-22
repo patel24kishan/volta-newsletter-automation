@@ -4,6 +4,7 @@
   "draft_layout": "events-first",
   "send_day": "monday",
   "reminder_time": "08:30",
+  "catch_up_days": 7,
   "content_window_days": 7,
   "events_window_days": 14,
   "watchlist": ["Volta", "voltaeffect"],

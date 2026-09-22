@@ -31,8 +31,9 @@ const file = join(dir, "claude_desktop_config.json");
 const launcher = join(dirname(fileURLToPath(import.meta.url)), "mcp-server.mjs").replace(/\\/g, "/");
 const live = process.argv.includes("--live");
 const now = process.argv.find((a) => a.startsWith("--now="));
-if (live && now) {
-  console.error("Refusing --live together with --now: the server will not run live with the clock overridden.");
+const demoClock = process.argv.includes("--demo-clock");
+if (live && now && !demoClock) {
+  console.error("Refusing --live together with --now: add --demo-clock for a deliberate live demo on that date.");
   process.exit(1);
 }
 
@@ -47,7 +48,7 @@ config.mcpServers = {
   "volta-newsletter": {
     command: "node",
     args: [launcher, ...(now ? [now] : [])],
-    env: { ALLOW_LIVE: live ? "1" : "0" },
+    env: { ALLOW_LIVE: live ? "1" : "0", ...(live && now ? { ALLOW_LIVE_WITH_DEMO_CLOCK: "1" } : {}) },
   },
 };
 writeFileSync(file, JSON.stringify(config, null, 2));

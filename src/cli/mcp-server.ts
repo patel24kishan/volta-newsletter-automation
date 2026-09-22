@@ -19,7 +19,7 @@ import { resolveClock } from "../clock.js";
 import { loadConfig } from "../config.js";
 import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
-import { isLive } from "../runtime.js";
+import { isLive, liveClockProblem } from "../runtime.js";
 import { SqliteStorage } from "../storage.js";
 import { startPreviewServer } from "../surface/preview-server.js";
 import { createNewsletterServer } from "../mcp/newsletter-server.js";
@@ -33,8 +33,9 @@ process.chdir(root);
 loadDotEnv();
 const env = process.env;
 const clock = resolveClock(process.argv.slice(2), env);
-if (isLive(env) && clock.overridden) {
-  console.error("volta-newsletter: refusing to run live with the clock overridden (--now or DEMO_NOW).");
+const clockProblem = liveClockProblem(env, clock);
+if (clockProblem) {
+  console.error(`volta-newsletter: ${clockProblem}`);
   process.exit(1);
 }
 const config = await loadConfig(env.CONFIG_PATH ?? "demo/config.json");
