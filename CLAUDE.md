@@ -20,7 +20,8 @@ An unattended weekly pipeline for Volta (startup hub, Halifax NS) that gathers, 
 
 - One feature per turn. A feature is one fetcher, one pipeline stage, or one integration, built end to end with a test.
 - Nothing is "built" until it runs. Nothing is "working" until a test covers it.
-- The feature-gate hook runs tests and typecheck when a turn ends. If red, keep fixing. If green, report the results and stop. Do not start the next feature until the user says so.
+- Every feature ships with unit tests for its own behaviour and at least one integration test that runs it together with the existing pipeline (`test/integration.test.ts`, `test/run-week.test.ts` or a `test/*.int.test.ts`). The feature gate enforces both.
+- The feature-gate hook runs when a turn ends: unit tests exist and pass for what changed, an integration test reaches every changed source file, and typecheck, the full suite and lint are green. If red, keep fixing (it blocks up to 5 attempts, then says it is still red). If green, report the results and stop. Do not start the next feature until the user says so.
 - Build one source end to end before touching the next.
 
 ## 4. Dry-run is the default
