@@ -34,6 +34,8 @@ import { whatIsDue } from "../schedule/scheduler.js";
 import type { SqliteStorage } from "../storage.js";
 import { REVIEW_LABEL } from "../surface/blocks.js";
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
+import { isManualItem } from "../manual-events.js";
+import { PANEL_MIME, PANEL_URI, panelHtml } from "./panel.js";
 
 export const SERVER_NAME = "volta-newsletter";
 
@@ -160,11 +162,18 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     ].join("\n"));
   });
 
+  // The review panel (an MCP App). Hosts that show apps render it for list_candidates; others
+  // just use the text, which is complete on its own.
+  server.registerResource("review-panel", PANEL_URI, {
+    title: "Newsletter review panel", description: "Tick items, edit wording, add events and build the draft.", mimeType: PANEL_MIME,
+  }, async () => ({ contents: [{ uri: PANEL_URI, mimeType: PANEL_MIME, text: panelHtml() }] }));
+
   server.registerTool("list_candidates", {
     title: "List the candidates",
-    description: "The candidates in groups (upcoming events, past events, news and updates), each with its id, whether it is ticked, and what Bader has edited. Use the ids with set_selection and edit_item.",
+    description: "The candidates in groups (upcoming events, past events, news and updates), each with its id, whether it is ticked, and what Bader has edited. Use the ids with set_selection and edit_item. In apps that support it, this also opens the interactive review panel.",
     inputSchema: { group: z.enum(["all", "upcoming", "past", "other"]).optional().describe("Only one group. Default all.") },
     annotations: { readOnlyHint: true },
+    _meta: { ui: { resourceUri: PANEL_URI }, "ui/resourceUri": PANEL_URI },
   }, async ({ group }) => {
     const st = await current();
     if (!prepared(st)) return notPrepared();
@@ -179,7 +188,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     if (!group || group === "all" || group === "upcoming") section("Upcoming events", g.upcomingEvents);
     if (!group || group === "all" || group === "past") section("Past events (last month)", g.pastEvents);
     if (!group || group === "all" || group === "other") section("News and updates", g.other);
-    return text(out.join("\n"));
+    return { ...text(out.join("\n")), structuredContent: panelState(st, periodWord, tz, isLive(d.env)) };
   });
 
   server.registerTool("set_selection", {
@@ -255,14 +264,15 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     if (!r.ok && r.reason === "nothing-selected") return text("Nothing is ticked. Tick at least one item with set_selection, then build again.", true);
     if (!r.ok) return text(`The draft did not pass verification, so it was not kept (the previous draft, if any, is still the one to approve):\n${r.violations.map((v) => `- ${v.kind}: ${v.value}`).join("\n")}`, true);
     const notes = draftNotesText(r.notes);
-    return text([
+    const panel = { key: r.key, subject: r.draft.subject, previewUrl: r.previewUrl ?? null, notes };
+    return { structuredContent: panel, ...text([
       `Draft key: ${r.key}`,
       `Subject: ${r.draft.subject}`,
       r.previewUrl ? `Preview: ${r.previewUrl}` : "Preview: not available (the preview server could not start).",
       `Verified: every name, date and link traces to a source or to Bader.`,
       ...(notes.length ? ["", ...notes] : []),
       "", "----- newsletter text (show verbatim) -----", r.draft.markdown, "----- end -----",
-    ].join("\n"));
+    ].join("\n")) };
   });
 
   server.registerTool("approve_draft", {
@@ -372,4 +382,76 @@ export function draftNotesText(notes: DraftNotes): string[] {
       ...notes.edited.map((e) => `• **${e.title}**: ${e.fields.join(", ")}`),
     ] : []),
   ];
+}
+
+/** One candidate as the review panel shows it. */
+export type PanelItem = {
+  id: string;
+  title: string;
+  ticked: boolean;
+  isEvent: boolean;
+  /** How the date reads in the list: "Thu Oct 22, 6:00 pm" for events, "2026-09-14" otherwise. */
+  when: string;
+  dateLocal: string;
+  timeLocal: string;
+  location?: string;
+  held: boolean;
+  holdNote?: string;
+  /** What the newsletter prints for it, in full: its points, or its description. */
+  prints: string[];
+  hasPoints: boolean;
+  /** Advice for the curator that is never printed. */
+  notes: string[];
+  edited: string[];
+  manual: boolean;
+  image?: string;
+  link: string;
+};
+
+export type PanelState = {
+  periodLabel: string;
+  dryRun: boolean;
+  ticked: number;
+  total: number;
+  groups: Array<{ key: "upcoming" | "past" | "other"; title: string; items: PanelItem[] }>;
+};
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DAYS: Record<string, string> = { sunday: "Sun", monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat" };
+
+export function panelItem(it: Item, ticked: boolean, timeZone: string): PanelItem {
+  const p = partsInZone(new Date(it.date), timeZone);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dateLocal = `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+  const h12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
+  const isEvent = it.type === "event";
+  const when = isEvent
+    ? `${isPastEvent(it) ? "held " : ""}${DAYS[p.weekday] ?? ""} ${MONTHS[p.month - 1]!.slice(0, 3)} ${p.day}, ${h12}:${pad(p.minute)} ${p.hour < 12 ? "am" : "pm"}`
+    : dateLocal;
+  const hasPoints = Boolean(it.insights?.length);
+  const prints = hasPoints ? it.insights! : it.summary ? [it.summary] : [];
+  const notes = [...(hasPoints && it.summary ? [it.summary] : []), ...(it.editor_notes ?? [])];
+  return {
+    id: it.id, title: it.title, ticked, isEvent, when, dateLocal, timeLocal: `${pad(p.hour)}:${pad(p.minute)}`,
+    ...(it.location ? { location: it.location } : {}), held: it.requires_review, ...(it.hold_note ? { holdNote: it.hold_note } : {}),
+    prints, hasPoints, notes, edited: it.edited_fields ?? [], manual: isManualItem(it), ...(it.image ? { image: it.image } : {}), link: it.link,
+  };
+}
+
+/** Everything the review panel draws: the period, the mode and the three groups. */
+export function panelState(st: ReviewState, periodWord: string, timeZone: string, live: boolean): PanelState {
+  const g = candidateGroups(st);
+  const ticked = new Set(currentSelection(st));
+  const items = (list: RankedItem[]) => list.map((c) => panelItem(c.item, ticked.has(c.item.id), timeZone));
+  const key = st.week ?? "";
+  const monthly = /^\d{4}-\d{2}$/.test(key);
+  const periodLabel = monthly ? `${MONTHS[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}` : `Week of ${key}`;
+  return {
+    periodLabel, dryRun: !live, ticked: ticked.size, total: st.candidates.length,
+    groups: [
+      { key: "upcoming", title: "Upcoming events", items: items(g.upcomingEvents) },
+      { key: "past", title: periodWord === "month" ? "Last month's events" : "Past events", items: items(g.pastEvents) },
+      { key: "other", title: "News and updates", items: items(g.other) },
+    ],
+  };
 }

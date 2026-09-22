@@ -1,0 +1,74 @@
+/**
+ * The review panel (MCP App): the page served to the Claude app, and the data it draws.
+ */
+import { runInNewContext } from "node:vm";
+import { describe, expect, it } from "vitest";
+import { panelItem } from "../src/mcp/newsletter-server.js";
+import { exposeExports, PANEL_MIME, PANEL_URI, panelHtml } from "../src/mcp/panel.js";
+import { sampleItem } from "./helpers.js";
+
+const TZ = "America/Halifax";
+
+describe("the panel page", () => {
+  it("turns the library's export statement into names the panel script can read", () => {
+    const out = exposeExports("var a=1;function c(){};export{a as App,c};");
+    expect(out).toBe("var a=1;function c(){};Object.assign(globalThis.__mcpApps||(globalThis.__mcpApps={}),{App:a,c:c});");
+    expect(() => exposeExports("var a=1;")).toThrow(/no export statement/);
+  });
+
+  it("is one self-contained page: the library and the panel script, nothing loaded from outside", () => {
+    const html = panelHtml();
+    expect(PANEL_URI).toBe("ui://volta-newsletter/review-panel.html");
+    expect(PANEL_MIME).toBe("text/html;profile=mcp-app");
+    expect(html.match(/<script type="module">/g)).toHaveLength(2);
+    expect(html).not.toMatch(/<script[^>]+src=/);
+    expect(html).not.toMatch(/<link[^>]+href=/);
+    expect(html).toContain('<main id="root">');
+    expect(html).toContain('callServerTool({ name, arguments: args })');
+  });
+
+  it("exposes the library's App once the library has run", () => {
+    const html = panelHtml();
+    const library = /<script type="module">([\s\S]*?)<\/script>/.exec(html)![1]!;
+    expect(library).not.toMatch(/export\s*\{/);
+    // The standard globals a browser (and Node) provides; nothing from the Claude app.
+    const sandbox: Record<string, unknown> = { URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, setTimeout, clearTimeout, console, crypto: globalThis.crypto };
+    sandbox.globalThis = sandbox;
+    sandbox.self = sandbox;
+    runInNewContext(library, sandbox);
+    const apps = sandbox.__mcpApps as Record<string, unknown>;
+    expect(typeof apps.App).toBe("function");
+    expect(typeof apps.applyDocumentTheme).toBe("function");
+  });
+});
+
+describe("what the panel draws for an item", () => {
+  it("an upcoming event: readable date, form values in Halifax time, location and link", () => {
+    const ev = sampleItem({ type: "event", title: "Fall Mixer", date: "2026-10-22T21:00:00Z", location: "Volta", link: "https://e.test/m", summary: "Meet the fall cohort.", event_timing: "upcoming" });
+    expect(panelItem(ev, true, TZ)).toMatchObject({
+      title: "Fall Mixer", ticked: true, isEvent: true, when: "Thu Oct 22, 6:00 pm", dateLocal: "2026-10-22", timeLocal: "18:00",
+      location: "Volta", prints: ["Meet the fall cohort."], hasPoints: false, notes: [], held: false, manual: false, link: "https://e.test/m",
+    });
+  });
+
+  it("a past event says it was held", () => {
+    const past = sampleItem({ type: "event", date: "2026-09-17T22:00:00Z", event_timing: "past" });
+    expect(panelItem(past, false, TZ).when).toBe("held Thu Sep 17, 7:00 pm");
+  });
+
+  it("a held founder update: its points print, its advice is a note, and the hold is shown", () => {
+    const held = sampleItem({
+      type: "member_social", title: "Bellwether Soil", requires_review: true, hold_note: "Embargo until Sep 30",
+      summary: "Run it after the funder announces.", insights: ["Won a soil-health grant."], editor_notes: ["Check the grant amount."],
+    });
+    expect(panelItem(held, false, TZ)).toMatchObject({
+      held: true, holdNote: "Embargo until Sep 30", prints: ["Won a soil-health grant."], hasPoints: true,
+      notes: ["Run it after the funder announces.", "Check the grant amount."], when: "2026-09-14",
+    });
+  });
+
+  it("an event Bader added is marked as his, with its image and edits", () => {
+    const mine = sampleItem({ type: "event", source: "manual-events", source_ref: "manual:me_1", image: "https://cdn.test/p.png", edited_fields: ["title"] });
+    expect(panelItem(mine, true, TZ)).toMatchObject({ manual: true, image: "https://cdn.test/p.png", edited: ["title"] });
+  });
+});

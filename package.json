@@ -31,6 +31,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@slack/bolt": "^5.1.0",
     "date-holidays": "^3.36.1",

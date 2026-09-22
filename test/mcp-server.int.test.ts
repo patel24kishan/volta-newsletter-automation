@@ -96,6 +96,40 @@ describe("the newsletter tools, as Claude uses them", () => {
     await c.close();
   });
 
+  it("offers the review panel, and feeds it the same data the panel's own buttons change", async () => {
+    const c = await connect();
+    const { tools } = await c.client.listTools();
+    const list = tools.find((t) => t.name === "list_candidates")!;
+    expect(list._meta).toMatchObject({ ui: { resourceUri: "ui://volta-newsletter/review-panel.html" }, "ui/resourceUri": "ui://volta-newsletter/review-panel.html" });
+
+    const { resources } = await c.client.listResources();
+    expect(resources).toContainEqual(expect.objectContaining({ uri: "ui://volta-newsletter/review-panel.html", mimeType: "text/html;profile=mcp-app" }));
+    const page = await c.client.readResource({ uri: "ui://volta-newsletter/review-panel.html" });
+    expect(page.contents[0]).toMatchObject({ mimeType: "text/html;profile=mcp-app" });
+    expect(String((page.contents[0] as { text: string }).text)).toContain('<main id="root">');
+
+    await c.call("prepare_month");
+    const first = (await c.client.callTool({ name: "list_candidates", arguments: {} })) as unknown as { structuredContent: { periodLabel: string; dryRun: boolean; ticked: number; total: number; groups: Array<{ key: string; items: Array<{ id: string; title: string; ticked: boolean }> }> } };
+    expect(first.structuredContent).toMatchObject({ periodLabel: "October 2026", dryRun: true, total: 3 });
+    expect(first.structuredContent.groups.map((g) => g.key)).toEqual(["upcoming", "past", "other"]);
+    const demo = first.structuredContent.groups[1]!.items.find((i) => i.title === "Demo Night")!;
+    expect(demo.ticked).toBe(false);
+
+    // What the panel does when a box is ticked: set the selection, then read the list again.
+    const ticked = first.structuredContent.groups.flatMap((g) => g.items).filter((i) => i.ticked).map((i) => i.id);
+    await c.client.callTool({ name: "set_selection", arguments: { select: [...ticked, demo.id] } });
+    const after = (await c.client.callTool({ name: "list_candidates", arguments: {} })) as unknown as typeof first;
+    expect(after.structuredContent.ticked).toBe(first.structuredContent.ticked + 1);
+    expect(after.structuredContent.groups[1]!.items.find((i) => i.id === demo.id)!.ticked).toBe(true);
+
+    // Build from the panel: the result carries what the panel shows (subject, preview, key).
+    const built = (await c.client.callTool({ name: "build_draft", arguments: {} })) as unknown as { structuredContent: { key: string; subject: string; previewUrl: string | null; notes: string[] } };
+    expect(built.structuredContent.subject).toMatch(/^Volta this month: /);
+    expect(built.structuredContent.previewUrl).toMatch(/^http:\/\/127\.0\.0\.1:3111\/preview\//);
+    expect(built.structuredContent.key).toMatch(/^[0-9a-f-]{36}$/);
+    await c.close();
+  });
+
   it("walks the month: prepare, list in groups, tick, add, edit, build and approve in dry run", async () => {
     const out = vi.spyOn(process.stdout, "write");
     const c = await connect();
