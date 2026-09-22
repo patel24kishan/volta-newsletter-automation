@@ -64,6 +64,19 @@ describe("dedupeItems", () => {
     expect(r.items[0]!.message_link).toBe("https://volta.slack.com/archives/C1/p1");
   });
 
+  it("keeps each occurrence of a recurring event, but merges two listings of the same day", () => {
+    const sept = sampleItem({ type: "event", source: "volta-calendar", link: "https://eventbrite.ca/e/vibe-1", title: "Vibe Coding Meetup", date: "2026-09-21T21:00:00Z", event_timing: "past" });
+    const oct = sampleItem({ type: "event", source: "volta-calendar", link: "https://eventbrite.ca/e/vibe-2", title: "Vibe Coding Meetup", date: "2026-10-19T21:00:00Z", event_timing: "upcoming" });
+    const r = dedupeItems([sept, oct], TZ);
+    expect(r.items.map((i) => i.date)).toEqual(["2026-09-21T21:00:00Z", "2026-10-19T21:00:00Z"]);
+    expect(r.merges).toEqual([]);
+
+    const otherListing = sampleItem({ type: "event", source: "other-calendar", link: "https://meetup.test/vibe", title: "Vibe Coding Meetup!", date: "2026-10-19T21:30:00Z" });
+    const same = dedupeItems([oct, otherListing], TZ);
+    expect(same.items).toHaveLength(1);
+    expect(same.items[0]!.related!.map((x) => x.link)).toEqual(["https://meetup.test/vibe"]);
+  });
+
   it("attaches the yoga post to the yoga event; the event survives", () => {
     const yoga = sampleItem({ type: "event", source: "volta-calendar", link: "https://eventbrite.ca/e/yoga", title: "Yoga", date: "2026-09-24T15:00:00Z", raw_excerpt: "Yoga Join us for a 1-hour guided yoga session." });
     const post = sampleItem({ type: "linkedin", source: "volta-linkedin", link: "https://linkedin.com/posts/y", title: "Will we see you next Thursday?", date: "2026-09-15T16:00:00Z", raw_excerpt: "On September 24, join us for a 1-hour guided yoga session with Jaimee." });

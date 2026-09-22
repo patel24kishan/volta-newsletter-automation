@@ -4,7 +4,9 @@
  *
  * Three rules, applied in order:
  *  1. Same link after URL normalization (tracking params, hash, trailing slash, host case).
- *  2. Near-identical titles (token containment or Jaccard >= 0.6 after normalization).
+ *  2. Near-identical titles (token containment or Jaccard >= 0.6 after normalization). Between two
+ *     events, only on the same local day: a recurring event ("Vibe Coding Meetup" every month) is a
+ *     new event each time, and folding them would hide this month's under last month's.
  *  3. A non-event item that names an upcoming event's title and its calendar date is attached to
  *     that event (the LinkedIn "join us for yoga on September 24" case).
  * Events the curator added by hand are matched differently; see `matches` below.
@@ -65,6 +67,9 @@ function matches(survivor: Item, cand: Item, timeZone: string): boolean {
   if (isManualItem(survivor) || isManualItem(cand)) {
     if (isManualItem(survivor) && isManualItem(cand)) return false;
     return similarTitle(survivor, cand) && sameLocalDay(survivor, cand, timeZone);
+  }
+  if (survivor.type === "event" && cand.type === "event") {
+    return sameLink(survivor, cand) || (similarTitle(survivor, cand) && sameLocalDay(survivor, cand, timeZone));
   }
   return sameLink(survivor, cand) || similarTitle(survivor, cand) || mentionsEvent(survivor, cand, timeZone);
 }

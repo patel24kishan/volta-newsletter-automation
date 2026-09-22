@@ -100,6 +100,29 @@ export function firstWorkdayOfPeriod(now: Date, config: PeriodConfig): FirstWork
     : firstWorkdayOfMonth(monthOf(now, config.timezone), config);
 }
 
+/** The instant a local date and "HH:MM" time names, in a timezone. */
+export function atLocal(date: string, hhmm: string, timeZone: string): Date {
+  const [y, m, d] = date.split("-").map(Number);
+  const [h, mi] = hhmm.split(":").map(Number);
+  return zonedToUtc(y!, m!, d!, h!, mi!, 0, timeZone);
+}
+
+/**
+ * When the period's newsletter is due: the first workday at the reminder time, and the moment after
+ * which it is too late to send it at all. Weekly gives up at the end of Friday, since a weekend
+ * reminder would be replaced by Monday's; monthly allows a week of catch-up after the first workday,
+ * since the next chance would otherwise be a month away.
+ */
+export function dueWindow(now: Date, config: PeriodConfig & Pick<Config, "reminder_time">): { period: Period; firstWorkday: FirstWorkday; dueAt: Date; giveUpAt: Date } {
+  const period = periodOf(now, config);
+  const firstWorkday = firstWorkdayOfPeriod(now, config);
+  const dueAt = atLocal(firstWorkday.date, config.reminder_time, config.timezone);
+  const giveUpAt = period.cadence === "weekly"
+    ? atLocal(addDays(period.key, 5), "00:00", config.timezone)
+    : atLocal(addDays(firstWorkday.date, 7), "00:00", config.timezone);
+  return { period, firstWorkday, dueAt, giveUpAt };
+}
+
 /** Local midnight at the start of a YYYY-MM-DD day, as an instant. */
 function startOfDay(date: string, timeZone: string): Date {
   const [y, m, d] = date.split("-").map(Number);

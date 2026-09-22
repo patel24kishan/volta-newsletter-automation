@@ -1,6 +1,7 @@
 /**
- * The weekly review, with no chat surface in it. Each step changes the review and returns what
- * happened; showing it is the caller's job, whether that is Slack buttons or tools Claude calls.
+ * The review of one newsletter (a week's or a month's), with no chat surface in it. Each step
+ * changes the review and returns what happened; showing it is the caller's job, whether that is
+ * Slack buttons or tools Claude calls.
  *
  * Nothing here takes newsletter text: a draft is built from item ids, approved by its key and
  * sent by its campaign id, so whoever drives these steps cannot put words in the email.
@@ -38,14 +39,15 @@ function selectionKey(st: ReviewState): string {
 }
 
 /**
- * Begin this week's review from a finished run: the candidates, with the pre-ticked ones as the
- * selection. Saved at once, so a new chat or a restart finds it.
+ * Begin the period's review from a finished run: the candidates, with the pre-ticked ones as the
+ * selection. Saved at once under the run's period (the month, when monthly), so a new chat or a
+ * restart later in the month finds it.
  */
 export function startReview(st: ReviewState, input: ReminderInput, channel = CLAUDE_CHANNEL): void {
   st.candidates = input.candidates;
   st.reminder = { input, channel, sentAt: now(st).toISOString() };
   st.selections.set(channel, input.preselectedIds);
-  st.week ??= input.firstWorkday.weekMonday;
+  st.week ??= input.period ?? input.firstWorkday.weekMonday;
   persistSession(st);
 }
 
@@ -137,7 +139,7 @@ export type BuildResult =
   | { ok: false; reason: "not-verified"; violations: Violation[]; items: Item[]; notes: DraftNotes };
 
 /**
- * Build this week's newsletter from the given ids (the current selection when omitted) and verify
+ * Build the newsletter from the given ids (the current selection when omitted) and verify
  * it. Only the newest draft is kept, so an Approve left over from an earlier one finds nothing; a
  * draft that fails verification is never kept, and the previous one stays exactly as it was.
  */
@@ -147,7 +149,7 @@ export function buildDraft(st: ReviewState, alerter: Alerter, ids: string[] = cu
   const notes = notesFor(items);
   if (items.length === 0) return { ok: false, reason: "nothing-selected", notes };
 
-  const drafts = buildDrafts(items, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"] });
+  const drafts = buildDrafts(items, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"], ...(st.cadence ? { cadence: st.cadence } : {}) });
   for (const d of drafts.filter((d) => !d.verification.ok)) {
     alerter.alert("error", `draft:${d.id}`, `withheld: ${d.verification.violations.map((v) => `${v.kind} "${v.value}"`).join(", ")}`, "inspect the items; the draft was not shown");
   }

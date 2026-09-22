@@ -56,6 +56,7 @@ export async function startSurface(o: SurfaceOptions): Promise<Surface> {
   const st: SurfaceState = {
     candidates: o.candidates, timeZone: config.timezone, outDir: o.outDir, drafts: new Map(), selections: new Map(),
     env, campaigns: new Set(), now: () => clock.now(), layout: config.draft_layout, session: storage, week: o.week,
+    ...(config.cadence ? { cadence: config.cadence } : {}),
   };
 
   // Campaigns are kept across weeks, so one approved before a restart can still be sent after it.
@@ -126,7 +127,7 @@ export async function startSurface(o: SurfaceOptions): Promise<Surface> {
 export function reminderInputFrom(run: RunSummary, config: Config, clockLabel: string): ReminderInput {
   return {
     candidates: run.candidates, preselectedIds: run.preselected_ids, firstWorkday: run.first_workday,
-    timeZone: config.timezone, clockLabel,
+    timeZone: config.timezone, clockLabel, period: run.period,
     sourceNotes: run.sources.filter((s) => s.status !== "ok").map((s) => `${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`),
   };
 }

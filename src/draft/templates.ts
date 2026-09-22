@@ -7,6 +7,7 @@
  * Sections with nothing say so instead of vanishing (constraint 5).
  */
 import { partsInZone } from "../clock.js";
+import type { Cadence } from "../config.js";
 import { type Item, isPastEvent } from "../schema.js";
 import { verifyDraft, type VerifyResult } from "../pipeline/verify.js";
 
@@ -26,10 +27,11 @@ export interface DraftOptions {
   footer?: string;
   /** Which layouts to build. Defaults to all three; the newsletter itself builds only one. */
   layouts?: Draft["id"][];
+  /** Says "this month" rather than "this week" when the newsletter is monthly. Weekly when absent. */
+  cadence?: Cadence;
 }
 
 const T = {
-  title: "This week at Volta",
   events: "Upcoming events",
   pastEvents: "Last month at Volta",
   held: "Held",
@@ -38,7 +40,6 @@ const T = {
   insights: "Key insights",
   withPerson: "With",
   ceo: "From the CEO",
-  none: (section: string) => `No ${section.toLowerCase()} items this week.`,
   eventPage: "Event page",
   readMore: "Read more",
   viewPost: "View post",
@@ -49,14 +50,23 @@ const T = {
   brief: "Brief",
   standard: "Standard",
   eventsFirst: "Events first",
-  subjectPrefix: "Volta this week",
 };
+
+/** The phrases that name the period, so a monthly newsletter never says "this week". */
+const PERIOD_WORD: Record<Cadence, string> = { weekly: "week", monthly: "month" };
+const P = {
+  title: (c: Cadence) => `This ${PERIOD_WORD[c]} at Volta`,
+  subjectPrefix: (c: Cadence) => `Volta this ${PERIOD_WORD[c]}`,
+  none: (section: string, c: Cadence) => `No ${section.toLowerCase()} items this ${PERIOD_WORD[c]}.`,
+};
+const CADENCES: Cadence[] = ["weekly", "monthly"];
+const cadence = (o: DraftOptions): Cadence => o.cadence ?? "weekly";
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
-  T.title, T.events, T.pastEvents, T.held, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
-  T.brief, T.standard, T.eventsFirst, T.subjectPrefix, "Volta", "LinkedIn", "Halifax",
-  ...["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => T.none(s)),
+  ...CADENCES.map(P.title), T.events, T.pastEvents, T.held, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
+  T.brief, T.standard, T.eventsFirst, ...CADENCES.map(P.subjectPrefix), "Volta", "LinkedIn", "Halifax",
+  ...CADENCES.flatMap((c) => ["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => P.none(s, c))),
   // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
   // so if it ever reached a draft the verifier would reject it rather than wave it through.
 ];
@@ -74,7 +84,7 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
     { id: "events-first", name: T.eventsFirst, blocks: eventsFirstBlocks(groups, opts) },
   ];
   const layouts = wanted ? all.filter((l) => wanted.includes(l.id)) : all;
-  const subject = subjectLine(items);
+  const subject = subjectLine(items, opts);
   return layouts.map(({ id, name, blocks }) => {
     const all: Block[] = [{ kind: "h1", text: subject }, ...blocks];
     if (opts.footer) all.push({ kind: "p", text: opts.footer });
@@ -103,14 +113,15 @@ function groupItems(items: Item[]): Groups {
   return g;
 }
 
-function subjectLine(items: Item[]): string {
+function subjectLine(items: Item[], o: DraftOptions): string {
   const top = items[0];
-  return top ? `${T.subjectPrefix}: ${top.title}` : T.subjectPrefix;
+  const prefix = P.subjectPrefix(cadence(o));
+  return top ? `${prefix}: ${top.title}` : prefix;
 }
 
-function section(title: string, list: Item[], render: (it: Item) => Block): Block[] {
+function section(title: string, list: Item[], render: (it: Item) => Block, o: DraftOptions): Block[] {
   const blocks: Block[] = [{ kind: "h2", text: title }];
-  if (list.length === 0) blocks.push({ kind: "p", text: T.none(title) });
+  if (list.length === 0) blocks.push({ kind: "p", text: P.none(title, cadence(o)) });
   else for (const it of list) blocks.push(render(it));
   return blocks;
 }
@@ -119,13 +130,13 @@ function section(title: string, list: Item[], render: (it: Item) => Block): Bloc
  * The look back at events already held. Only when one was chosen: a weekly newsletter never has
  * one, and a month with none to recall is better without an empty heading.
  */
-function pastSection(g: Groups, render: (it: Item) => Block): Block[] {
-  return g.pastEvents.length ? section(T.pastEvents, g.pastEvents, render) : [];
+function pastSection(g: Groups, render: (it: Item) => Block, o: DraftOptions): Block[] {
+  return g.pastEvents.length ? section(T.pastEvents, g.pastEvents, render, o) : [];
 }
 
 /** Key insights appears only when a member update was selected; the other sections always show. */
-function insightsSection(g: Groups, render: (it: Item) => Block): Block[] {
-  return g.members.length ? section(T.insights, g.members, render) : [];
+function insightsSection(g: Groups, render: (it: Item) => Block, o: DraftOptions): Block[] {
+  return g.members.length ? section(T.insights, g.members, render, o) : [];
 }
 
 function briefBlocks(g: Groups, o: DraftOptions): Block[] {
@@ -134,19 +145,19 @@ function briefBlocks(g: Groups, o: DraftOptions): Block[] {
     if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
     return block;
   };
-  return [...section(T.events, g.events, line), ...pastSection(g, line), ...insightsSection(g, line), ...section(T.news, g.news, line), ...section(T.linkedin, g.linkedin, line), ...(g.ceo.length ? section(T.ceo, g.ceo, line) : [])];
+  return [...section(T.events, g.events, line, o), ...pastSection(g, line, o), ...insightsSection(g, line, o), ...section(T.news, g.news, line, o), ...section(T.linkedin, g.linkedin, line, o), ...(g.ceo.length ? section(T.ceo, g.ceo, line, o) : [])];
 }
 
 /** Standard leads with the stories: Key insights first, then events, news and LinkedIn. */
 function standardBlocks(g: Groups, o: DraftOptions): Block[] {
   return [
     { kind: "p", text: T.intro },
-    ...insightsSection(g, (it) => fullItem(it, o)),
-    ...section(T.events, g.events, (it) => fullItem(it, o)),
-    ...pastSection(g, (it) => fullItem(it, o)),
-    ...section(T.news, g.news, (it) => fullItem(it, o)),
-    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
-    ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
+    ...insightsSection(g, (it) => fullItem(it, o), o),
+    ...section(T.events, g.events, (it) => fullItem(it, o), o),
+    ...pastSection(g, (it) => fullItem(it, o), o),
+    ...section(T.news, g.news, (it) => fullItem(it, o), o),
+    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o), o),
+    ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o), o) : []),
   ];
 }
 
@@ -156,12 +167,12 @@ function standardBlocks(g: Groups, o: DraftOptions): Block[] {
  */
 function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
   return [
-    ...section(T.events, g.events, (it) => fullItem(it, o)),
-    ...pastSection(g, (it) => fullItem(it, o)),
-    ...insightsSection(g, (it) => fullItem(it, o)),
-    ...section(T.news, g.news, (it) => fullItem(it, o)),
-    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o)),
-    ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o)) : []),
+    ...section(T.events, g.events, (it) => fullItem(it, o), o),
+    ...pastSection(g, (it) => fullItem(it, o), o),
+    ...insightsSection(g, (it) => fullItem(it, o), o),
+    ...section(T.news, g.news, (it) => fullItem(it, o), o),
+    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o), o),
+    ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o), o) : []),
   ];
 }
 

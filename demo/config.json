@@ -1,5 +1,6 @@
 {
   "timezone": "America/Halifax",
+  "cadence": "monthly",
   "draft_layout": "events-first",
   "send_day": "monday",
   "reminder_time": "08:30",

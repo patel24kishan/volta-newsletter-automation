@@ -45,6 +45,8 @@ export interface ReminderInput {
   timeZone: string;
   clockLabel: string;
   sourceNotes: string[];
+  /** The period the run was for (the Monday, or the month such as 2026-10); the review is saved under it. */
+  period?: string;
 }
 
 type Block = Record<string, unknown>;

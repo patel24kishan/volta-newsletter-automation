@@ -7,7 +7,9 @@ import { resolveClock } from "../src/clock.js";
 import type { Config } from "../src/config.js";
 import { runWeek } from "../src/run-week.js";
 import { buildDraft, candidateGroups, currentSelection, setSelection, startReview, type ReviewState } from "../src/review/review.js";
+import { periodOf } from "../src/schedule/period.js";
 import { SqliteStorage } from "../src/storage.js";
+import { loadReview, restoreSession } from "../src/surface/session.js";
 
 const config: Config = {
   timezone: "America/Halifax", draft_layout: "events-first", send_day: "monday", reminder_time: "08:30", content_window_days: 7, events_window_days: 14,
@@ -154,6 +156,53 @@ describe("runWeek on a monthly cadence (integration)", () => {
     expect(md.indexOf("Fall Mixer", up)).toBeLessThan(past);
     expect(md.indexOf("Demo Night", past)).toBeGreaterThan(past);
     expect(md).toMatch(/Held: Thursday, September 17/);
+  });
+
+  it("is due on the month's first workday, is saved under the month, and reads as this month's", async () => {
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {});
+    const monthlyConfig: Config = { ...config, cadence: "monthly" };
+    const s = await runWeek({ config: monthlyConfig, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    expect(s).toMatchObject({ period: "2026-10", cadence: "monthly", reminder_due: true, first_workday: { date: "2026-10-01", weekday: "thursday" } });
+    const pregenerated = readFileSync(s.drafts[0]!.file_md, "utf8");
+    expect(pregenerated).toMatch(/^# Volta this month: /);
+    expect(pregenerated).not.toMatch(/this week/i);
+
+    // The review starts on the 1st and is saved under the month ...
+    const first: ReviewState = {
+      candidates: [], timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: {}, campaigns: new Set(),
+      session: storage, layout: "events-first", cadence: "monthly", now: () => clock.now(),
+    };
+    startReview(first, { candidates: s.candidates, preselectedIds: s.preselected_ids, firstWorkday: s.first_workday, period: s.period, timeZone: config.timezone, clockLabel: clock.label, sourceNotes: [] });
+    // ... so a new chat on 20 October, working the key out from its own date, picks it up.
+    const later = new Date("2026-10-20T15:00:00Z");
+    const saved = loadReview(storage, periodOf(later, monthlyConfig).key);
+    if (!saved || !("snapshot" in saved)) throw new Error("expected the October review");
+    const next: ReviewState = { ...first, candidates: [], drafts: new Map(), selections: new Map(), now: () => later };
+    restoreSession(next, saved.snapshot);
+    const built = buildDraft(next, new MemoryAlerter());
+    if (!built.ok) throw new Error("expected a verified draft");
+    expect(built.draft.subject).toMatch(/^Volta this month: /);
+    expect(built.draft.markdown).toContain("Fall Mixer");
+  });
+
+  it("is not due before 08:30 on the first workday, nor on a later day of the month", async () => {
+    const monthlyConfig: Config = { ...config, cadence: "monthly" };
+    const early = await runWeek({ config: monthlyConfig, clock: resolveClock(["--now=2026-10-01T11:29:00Z"], {}), storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    expect(early.reminder_due).toBe(false);
+    const later = await runWeek({ config: monthlyConfig, clock: resolveClock(["--now=2026-10-02T11:30:00Z"], {}), storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    expect(later.reminder_due).toBe(false);
+    expect(later.period).toBe("2026-10");
+  });
+
+  it("lists both months of a recurring event, each in its own group (found on live data)", async () => {
+    const vibe = (uid: string, start: string) => ["BEGIN:VEVENT", `UID:${uid}`, "SUMMARY:Vibe Coding Meetup", `DTSTART:${start}`, `DTEND:${start}`, `URL:https://www.eventbrite.ca/e/${uid}`, "DESCRIPTION:Build something, share it.", "END:VEVENT"].join("\r\n");
+    const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", vibe("vibe-sep", "20260921T210000Z"), vibe("vibe-oct", "20261019T210000Z"), "END:VCALENDAR"].join("\r\n");
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {});
+    const s = await runWeek({ config: { ...config, cadence: "monthly" }, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: async (url) => (url === "https://cal.test/ics" ? ics : monthlyFetch(url)) });
+    const g = candidateGroups({ candidates: s.candidates });
+    expect(g.pastEvents.map((c) => c.item.date)).toEqual(["2026-09-21T21:00:00.000Z"]);
+    expect(g.upcomingEvents.map((c) => c.item.date)).toEqual(["2026-10-19T21:00:00.000Z"]);
+    expect(s.merges.filter((m) => m.includes("Vibe Coding"))).toEqual([]);
   });
 
   it("with the same sources, a weekly run still reads only the last 7 days and the next 14", async () => {

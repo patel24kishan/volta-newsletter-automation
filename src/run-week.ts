@@ -8,8 +8,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Alerter } from "./alerts.js";
-import type { Clock } from "./clock.js";
-import type { Config } from "./config.js";
+import { localDateString, type Clock } from "./clock.js";
+import { cadenceOf, type Cadence, type Config } from "./config.js";
 import { buildDrafts, type Draft } from "./draft/templates.js";
 import { fetcherFor } from "./fetchers/index.js";
 import type { FetchContext } from "./fetchers/types.js";
@@ -17,8 +17,8 @@ import { dedupeItems } from "./pipeline/dedupe.js";
 import { rankItems, type RankedItem } from "./pipeline/rank.js";
 import { ExtractiveSummarizer } from "./pipeline/summarize.js";
 import { isPastEvent, type Item } from "./schema.js";
-import { firstWorkdayOfWeek, reminderDue, type FirstWorkday } from "./schedule/first-workday.js";
-import { windowsFor } from "./schedule/period.js";
+import { reminderDue, type FirstWorkday } from "./schedule/first-workday.js";
+import { dueWindow, windowsFor } from "./schedule/period.js";
 import type { Storage } from "./storage.js";
 
 export interface RunOptions {
@@ -47,7 +47,11 @@ export interface RunSummary {
   candidates: RankedItem[];
   preselected_ids: string[];
   drafts: Array<{ id: Draft["id"]; name: string; subject: string; verified: boolean; violations: string[]; file_md: string; file_html: string }>;
+  /** The period this run is for: the Monday (weekly) or the month, such as 2026-10 (monthly). */
+  period: string;
+  cadence: Cadence;
   first_workday: FirstWorkday;
+  /** True on the period's first workday, at or after the reminder time. */
   reminder_due: boolean;
   local_now: string;
   alerts: number;
@@ -111,7 +115,7 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   const n = o.preselect ?? 10;
   // Held items and last month's events are listed but never pre-ticked: each is the curator's call.
   const preselected = candidates.filter((c) => !c.item.requires_review && !isPastEvent(c.item)).slice(0, n).map((c) => c.item);
-  const drafts = buildDrafts(preselected, { timeZone: config.timezone, layouts: [config.draft_layout] });
+  const drafts = buildDrafts(preselected, { timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config) });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {
     const md = join(o.outDir, "drafts", `${d.id}.md`);
@@ -126,11 +130,12 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
     }
     draftRows.push({ id: d.id, name: d.name, subject: d.subject, verified: d.verification.ok, violations: d.verification.violations.map((v) => `${v.kind}: ${v.value}`), file_md: md, file_html: html });
   }
-  if (draftRows.every((d) => !d.verified)) alerter.alert("error", "drafts", "no draft passed verification", "a human must write this week's newsletter by hand");
+  if (draftRows.every((d) => !d.verified)) alerter.alert("error", "drafts", "no draft passed verification", `a human must write this ${cadenceOf(config) === "monthly" ? "month" : "week"}'s newsletter by hand`);
 
   // 4. Schedule
-  const fw = firstWorkdayOfWeek(now, config);
-  const due = reminderDue(now, config);
+  // The week's or the month's first workday, by the config's cadence (src/schedule/period.ts).
+  const { period, firstWorkday: fw, dueAt } = dueWindow(now, config);
+  const due = { due: localDateString(now, config.timezone) === fw.date && now >= dueAt, localNow: reminderDue(now, config).localNow };
   if (fw.skipped.length) alerter.alert("info", "schedule", `first workday is ${fw.weekday} ${fw.date}; skipped: ${fw.skipped.join("; ")}`, "no action");
 
   const summary: RunSummary = {
@@ -143,6 +148,8 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
     candidates,
     preselected_ids: preselected.map((i) => i.id),
     drafts: draftRows,
+    period: period.key,
+    cadence: period.cadence,
     first_workday: fw,
     reminder_due: due.due,
     local_now: due.localNow,

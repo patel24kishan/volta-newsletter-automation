@@ -4,7 +4,7 @@
  * Every post goes through assertLive: dry-run never reaches a human (CLAUDE.md section 4).
  */
 import type { Alerter } from "../alerts.js";
-import type { SourceConfig } from "../config.js";
+import type { Cadence, SourceConfig } from "../config.js";
 import type { Draft } from "../draft/templates.js";
 import type { ManualEventErrors, ManualEventFields } from "../manual-events.js";
 import type { RankedItem } from "../pipeline/rank.js";
@@ -44,8 +44,13 @@ export interface SurfaceState {
   reminder?: { input: ReminderInput; channel: string; ts?: string; sentAt?: string };
   /** Where the review is saved so a restart does not lose it. Absent means nothing is saved. */
   session?: Pick<Storage, "saveSession" | "recordCampaign" | "markCampaignSent">;
-  /** The week this review belongs to, as the Monday of that week. */
+  /**
+   * The period this review belongs to, which it is saved under: the Monday of the week (weekly) or
+   * the month, such as 2026-10 (monthly). Named `week` from when every newsletter was weekly.
+   */
   week?: string;
+  /** Whether the newsletter is weekly or monthly, for its wording. Weekly when absent. */
+  cadence?: Cadence;
   /** Where events the curator adds are kept. Absent means the Add an event form is not offered. */
   storage?: Pick<Storage, "addManualEvent">;
   /** The manual source's config, so an added event links and types like a calendar event. */

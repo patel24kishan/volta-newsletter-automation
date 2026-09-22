@@ -2,14 +2,14 @@
 
 ## 1. What this is
 
-An unattended weekly pipeline for Volta (startup hub, Halifax NS) that gathers, dedupes, summarizes and drafts a newsletter, then hands it to Bader (events staff). Bader makes exactly two decisions: which items make the cut, and which draft to send after editing. Reasoning and design live in `PLAN.md`; this file is the rules.
+An unattended newsletter pipeline for Volta (startup hub, Halifax NS), monthly by default (`cadence` in config; weekly still supported), that gathers, dedupes, summarizes and drafts a newsletter, then hands it to Bader (events staff). Bader makes exactly two decisions: which items make the cut, and whether to send the draft after editing. Reasoning and design live in `PLAN.md`; this file is the rules.
 
 ## 2. Non-negotiable constraints
 
 1. 90/10 rule: Bader's only manual steps are selecting items and pressing send. Everything else runs unattended.
 2. All candidate items land in one place, already summarized and deduplicated. Bader never visits multiple sources.
-3. The system produces 2-3 complete draft newsletters, not fragments.
-4. A reminder reaches Bader on the first workday of the week with drafts already waiting.
+3. The system produces one complete draft newsletter, not fragments.
+4. On the first workday of the newsletter's period (the month, by default), the period's candidates are gathered and a draft is waiting for Bader.
 5. Never invent an event, quote, member name, date or news mention. Every item traces to a retrieved source and carries its link. If a source returns nothing, the draft says so rather than filling space.
 6. Boring, well-documented technology only. This runs weekly for years.
 7. No credentials in code. See section 6.
@@ -30,7 +30,11 @@ Every command runs in dry-run mode unless `ALLOW_LIVE=1` is set for that invocat
 
 ## 5. First-workday rule
 
-Reminders and sends key off the Nova Scotia statutory holiday table (`date-holidays`, region `CA-NS`, plus the config sheet's holidays tab). If Monday is a holiday, the first workday is Tuesday. Never hardcode a weekday.
+Reminders and sends key off the first workday of the period: the first weekday of the month (weekly: of the week) that is not a Nova Scotia statutory holiday (`date-holidays`, region `CA-NS`) or a closure in the config sheet's holidays tab. Canada Day on the 1st moves a monthly send to the 2nd; a Monday holiday moves a weekly send to Tuesday. Never hardcode a date or weekday.
+
+## 5a. Monthly windows
+
+News, LinkedIn, Slack and past events cover the previous calendar month up to the run; upcoming events cover the rest of the send month. Past and upcoming events are never mixed, in the list or in the newsletter.
 
 ## 6. Secrets
 

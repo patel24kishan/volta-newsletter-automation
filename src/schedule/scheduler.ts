@@ -8,18 +8,22 @@
  * sent late, with a note saying so, until the end of Friday, and only then given up with an alert.
  */
 import type { Alerter } from "../alerts.js";
-import { zonedToUtc, type Clock } from "../clock.js";
+import type { Clock } from "../clock.js";
 import type { Config } from "../config.js";
 import type { Storage } from "../storage.js";
 import type { ReminderInput } from "../surface/blocks.js";
 import { sendReminder, type SlackClient, type SurfaceState } from "../surface/handlers.js";
 import { parseSession } from "../surface/session.js";
-import { addDays, firstWorkdayOfWeek, mondayOfWeek, type FirstWorkday } from "./first-workday.js";
+import type { FirstWorkday } from "./first-workday.js";
+import { dueWindow, periodOf } from "./period.js";
 
 export type ReminderState = "not-yet" | "due" | "due-late" | "missed" | "closed" | "sent";
 
 export interface Decision {
-  /** The Monday of the week `now` falls in, which is how a week is named everywhere. */
+  /**
+   * The period `now` falls in, which is how a review is named everywhere: the Monday of the week
+   * (weekly) or the month, such as 2026-10 (monthly).
+   */
   week: string;
   reminder: ReminderState;
   firstWorkday: FirstWorkday;
@@ -31,28 +35,22 @@ export const LATE_AFTER_MS = 60 * 60 * 1000;
 /** A send claim older than this was abandoned by a process that died, and can be taken over. */
 export const CLAIM_TTL_MS = 10 * 60 * 1000;
 
-type ScheduleConfig = Pick<Config, "timezone" | "holiday_overrides" | "reminder_time">;
+type ScheduleConfig = Pick<Config, "timezone" | "holiday_overrides" | "reminder_time" | "cadence">;
 
 /** What is due at `now`. Pure: the same inputs always give the same answer, whatever the server's timezone. */
 export function whatIsDue(now: Date, config: ScheduleConfig, state: { reminderSent: boolean }): Decision {
-  const week = mondayOfWeek(now, config.timezone);
-  const firstWorkday = firstWorkdayOfWeek(now, config);
-  const dueAt = atLocal(firstWorkday.date, config.reminder_time, config.timezone);
-  const base = { week, firstWorkday, dueAt };
+  const { period, firstWorkday, dueAt, giveUpAt } = dueWindow(now, config);
+  const base = { week: period.key, firstWorkday, dueAt };
   if (state.reminderSent) return { ...base, reminder: "sent" };
-  // Every weekday closed (the year-end week): no reminder for a newsletter nobody will send.
-  if (firstWorkday.skipped.length >= 5) return { ...base, reminder: "closed" };
+  // Every weekday closed (the year-end week): no reminder for a newsletter nobody will send. A
+  // month always has a workday, so only a weekly newsletter can be closed.
+  if (period.cadence === "weekly" && firstWorkday.skipped.length >= 5) return { ...base, reminder: "closed" };
   if (now < dueAt) return { ...base, reminder: "not-yet" };
-  // Saturday 00:00 local ends the chance: a weekend reminder would be replaced by Monday's.
-  if (now >= atLocal(addDays(week, 5), "00:00", config.timezone)) return { ...base, reminder: "missed" };
+  // Past the last chance (weekly: Saturday 00:00; monthly: a week after the first workday).
+  if (now >= giveUpAt) return { ...base, reminder: "missed" };
   return { ...base, reminder: now.getTime() - dueAt.getTime() > LATE_AFTER_MS ? "due-late" : "due" };
 }
 
-function atLocal(date: string, hhmm: string, timeZone: string): Date {
-  const [y, m, d] = date.split("-").map(Number);
-  const [h, mi] = hhmm.split(":").map(Number);
-  return zonedToUtc(y!, m!, d!, h!, mi!, 0, timeZone);
-}
 
 export interface SchedulerDeps {
   config: ScheduleConfig;
@@ -122,7 +120,7 @@ export class WeeklyScheduler {
       await this.d.everyTick?.();
     } catch { /* its own business to alert; a failed retry must not stop the reminder */ }
     const now = this.d.clock.now();
-    const week = mondayOfWeek(now, this.d.config.timezone);
+    const week = periodOf(now, this.d.config).key;
     const raw = this.d.storage.loadSession(week);
     const readable = raw !== undefined && !("error" in parseSession(raw));
     const decision = whatIsDue(now, this.d.config, { reminderSent: readable });
