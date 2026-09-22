@@ -57,6 +57,11 @@ export interface Item {
    * agree. Absent on events from before this field existed, which count as upcoming.
    */
   event_timing?: EventTiming;
+  /**
+   * Fields the curator reworded (summary, starts_at, location, link). Set only on the copy a draft
+   * is built from, never stored on the item itself: the source text stays as it was fetched.
+   */
+  edited_fields?: string[];
 }
 
 export type EventTiming = "past" | "upcoming";
@@ -107,7 +112,7 @@ export function validateItem(value: unknown): ValidationResult {
   bool("needs_summary");
   bool("requires_review");
   if ("location" in it && it.location !== undefined && typeof it.location !== "string") errors.push("location must be a string when present");
-  for (const key of ["insights", "editor_notes"] as const) {
+  for (const key of ["insights", "editor_notes", "edited_fields"] as const) {
     const v = it[key];
     if (v !== undefined && (!Array.isArray(v) || !v.every((s) => typeof s === "string"))) errors.push(`${key} must be an array of strings when present`);
   }

@@ -49,6 +49,8 @@ export interface SurfaceState {
    * the month, such as 2026-10 (monthly). Named `week` from when every newsletter was weekly.
    */
   week?: string;
+  /** The curator's own wording for items, kept per period (src/review/edits.ts). Absent means no edits. */
+  edits?: Pick<Storage, "setCuratorEdit" | "listCuratorEdits">;
   /** Whether the newsletter is weekly or monthly, for its wording. Weekly when absent. */
   cadence?: Cadence;
   /** Where events the curator adds are kept. Absent means the Add an event form is not offered. */

@@ -40,7 +40,21 @@ export interface Storage {
   getMark(task: string, period: string): ScheduleMark | undefined;
   /** Keep work for `task` so a retry, even after a restart, need not repeat it. */
   setMarkPayload(task: string, period: string, payload: string): void;
+  /**
+   * The curator's own wording for one field of one item, for a period. Kept apart from the items,
+   * which are never overwritten, so a re-fetch cannot lose it. `null` removes it.
+   */
+  setCuratorEdit(period: string, itemId: string, field: string, value: string | null, nowIso: string): void;
+  listCuratorEdits(period: string): CuratorEdit[];
   close(): void;
+}
+
+export interface CuratorEdit {
+  period: string;
+  item_id: string;
+  field: string;
+  value: string;
+  edited_at: string;
 }
 
 export interface ScheduleMark {
@@ -118,6 +132,14 @@ export class SqliteStorage implements Storage {
         done_at TEXT,
         payload TEXT,
         PRIMARY KEY (task, period)
+      );
+      CREATE TABLE IF NOT EXISTS curator_edits (
+        period TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        field TEXT NOT NULL,
+        value TEXT NOT NULL,
+        edited_at TEXT NOT NULL,
+        PRIMARY KEY (period, item_id, field)
       );
     `);
     this.migrate();
@@ -237,6 +259,20 @@ export class SqliteStorage implements Storage {
 
   markCampaignSent(id: string): void {
     this.db.prepare("UPDATE campaigns SET sent_at = ? WHERE id = ? AND sent_at IS NULL").run(new Date().toISOString(), id);
+  }
+
+  setCuratorEdit(period: string, itemId: string, field: string, value: string | null, nowIso: string): void {
+    if (value === null) {
+      this.db.prepare("DELETE FROM curator_edits WHERE period = ? AND item_id = ? AND field = ?").run(period, itemId, field);
+      return;
+    }
+    this.db
+      .prepare("INSERT INTO curator_edits (period, item_id, field, value, edited_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(period, item_id, field) DO UPDATE SET value = excluded.value, edited_at = excluded.edited_at")
+      .run(period, itemId, field, value, nowIso);
+  }
+
+  listCuratorEdits(period: string): CuratorEdit[] {
+    return this.db.prepare("SELECT period, item_id, field, value, edited_at FROM curator_edits WHERE period = ? ORDER BY edited_at ASC").all(period) as unknown as CuratorEdit[];
   }
 
   listCampaigns(): CampaignRecord[] {

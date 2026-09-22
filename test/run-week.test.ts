@@ -6,7 +6,7 @@ import { MemoryAlerter } from "../src/alerts.js";
 import { resolveClock } from "../src/clock.js";
 import type { Config } from "../src/config.js";
 import { runWeek } from "../src/run-week.js";
-import { buildDraft, candidateGroups, currentSelection, setSelection, startReview, type ReviewState } from "../src/review/review.js";
+import { buildDraft, candidateGroups, currentSelection, editItem, setSelection, startReview, type ReviewState } from "../src/review/review.js";
 import { periodOf } from "../src/schedule/period.js";
 import { SqliteStorage } from "../src/storage.js";
 import { loadReview, restoreSession } from "../src/surface/session.js";
@@ -192,6 +192,48 @@ describe("runWeek on a monthly cadence (integration)", () => {
     const later = await runWeek({ config: monthlyConfig, clock: resolveClock(["--now=2026-10-02T11:30:00Z"], {}), storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
     expect(later.reminder_due).toBe(false);
     expect(later.period).toBe("2026-10");
+  });
+
+  it("keeps the curator's wording through a change of items, a rebuild and a new chat", async () => {
+    const clock = resolveClock(["--now=2026-10-01T11:30:00Z"], {});
+    const monthlyConfig: Config = { ...config, cadence: "monthly" };
+    const s = await runWeek({ config: monthlyConfig, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
+    const id = (t: string) => s.candidates.find((c) => c.item.title === t)!.item.id;
+    const fresh = (): ReviewState => ({
+      candidates: [], timeZone: config.timezone, outDir, drafts: new Map(), selections: new Map(), env: {}, campaigns: new Set(),
+      session: storage, edits: storage, week: s.period, layout: "events-first", cadence: "monthly", now: () => new Date("2026-10-02T13:00:00Z"),
+    });
+    const st = fresh();
+    startReview(st, { candidates: s.candidates, preselectedIds: s.preselected_ids, firstWorkday: s.first_workday, period: s.period, timeZone: config.timezone, clockLabel: clock.label, sourceNotes: [] });
+
+    // Tick, build, then reword the mixer and move it an hour later.
+    setSelection(st, [id("Fall Mixer"), id("Volta opens applications for its fall cohort")]);
+    expect(editItem(st, id("Fall Mixer"), "summary", "Drinks, demos and the whole fall cohort.")).toHaveProperty("item");
+    expect(editItem(st, id("Fall Mixer"), "starts_at", "2026-10-22 19:00")).toHaveProperty("item");
+    const first = buildDraft(st, new MemoryAlerter());
+    if (!first.ok) throw new Error("expected a verified draft");
+    expect(first.draft.markdown).toContain("Drinks, demos and the whole fall cohort.");
+    expect(first.draft.markdown).toContain("When: Thursday, October 22, 7:00 pm");
+
+    // Change the items: add last month's Demo Night, drop the news. The edit stays.
+    setSelection(st, [id("Fall Mixer"), id("Demo Night")]);
+    const second = buildDraft(st, new MemoryAlerter());
+    if (!second.ok) throw new Error("expected a verified draft");
+    expect(second.draft.markdown).toContain("Drinks, demos and the whole fall cohort.");
+    expect(second.draft.markdown).toContain("## Last month at Volta");
+    expect(second.draft.markdown).not.toContain("fall cohort of founders");
+    expect(second.notes.edited).toEqual([{ id: id("Fall Mixer"), title: "Fall Mixer", fields: ["description", "date and time"] }]);
+
+    // A new chat restores the saved review and still finds the edits.
+    const saved = loadReview(storage, s.period);
+    if (!saved || !("snapshot" in saved)) throw new Error("expected the saved review");
+    const next = fresh();
+    restoreSession(next, saved.snapshot);
+    const third = buildDraft(next, new MemoryAlerter());
+    if (!third.ok) throw new Error("expected a verified draft");
+    expect(third.draft.markdown).toContain("Drinks, demos and the whole fall cohort.");
+    // The source item itself was never rewritten.
+    expect(storage.getItem(id("Fall Mixer"))!.summary).toBe("Meet the fall cohort.");
   });
 
   it("lists both months of a recurring event, each in its own group (found on live data)", async () => {

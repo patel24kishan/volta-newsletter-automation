@@ -22,6 +22,7 @@ import { isPastEvent, type Item } from "../schema.js";
 import type { ReminderInput } from "../surface/blocks.js";
 import type { SurfaceState } from "../surface/handlers.js";
 import { persistSession, type DraftRecord } from "../surface/session.js";
+import { applyEdits, EDIT_FIELD_LABEL, EDIT_FIELDS, isEditField, normalizeEdit, type EditField } from "./edits.js";
 
 /** The review's state. The same shape the Slack surface uses, so both read one saved review. */
 export type ReviewState = SurfaceState;
@@ -62,11 +63,14 @@ export interface CandidateGroups {
   other: RankedItem[];
 }
 
-export function candidateGroups(st: Pick<ReviewState, "candidates">): CandidateGroups {
+export function candidateGroups(st: Pick<ReviewState, "candidates"> & Partial<ReviewState>): CandidateGroups {
   const upcomingEvents: RankedItem[] = [];
   const pastEvents: RankedItem[] = [];
   const other: RankedItem[] = [];
-  for (const c of st.candidates) {
+  // Shown as the curator left them: an event whose date was edited moves to the group it now fits.
+  const edited = withEdits(st as ReviewState, st.candidates.map((c) => c.item));
+  for (const [i, c0] of st.candidates.entries()) {
+    const c = edited[i] === c0.item ? c0 : { ...c0, item: edited[i]! };
     if (isPastEvent(c.item)) pastEvents.push(c);
     else if (c.item.type === "event") upcomingEvents.push(c);
     else other.push(c);
@@ -120,16 +124,53 @@ export function addEvent(st: ReviewState, fields: ManualEventFields): { item: It
   return { item };
 }
 
+/** The run's time: what past and upcoming were decided against. */
+function runAt(st: ReviewState): Date {
+  const sent = st.reminder?.sentAt ? new Date(st.reminder.sentAt) : undefined;
+  return sent && !Number.isNaN(sent.getTime()) ? sent : now(st);
+}
+
+/** Items as the curator has worded them for this period. Unchanged when nothing was edited. */
+function withEdits(st: ReviewState, items: Item[]): Item[] {
+  if (!st.edits || !st.week) return items;
+  return applyEdits(items, st.edits.listCuratorEdits(st.week), runAt(st));
+}
+
+export type EditResult = { item: Item } | { error: string };
+
+/**
+ * Save the curator's wording for one field of a candidate, or clear it (`value` null) to go back to
+ * the source's text. Takes the curator's exact words: nothing here writes text of its own. Saved
+ * for the period and applied to every later build, whatever is ticked.
+ */
+export function editItem(st: ReviewState, itemId: string, field: string, value: string | null): EditResult {
+  if (!st.edits || !st.week) throw new Error("edits are not available: no storage for this review");
+  const candidate = st.candidates.find((c) => c.item.id === itemId)?.item;
+  if (!candidate) return { error: `${itemId} is not one of this period's candidates` };
+  if (!isEditField(field)) return { error: `${field} cannot be edited; the fields that can are ${EDIT_FIELDS.join(", ")}` };
+  if (value === null) {
+    st.edits.setCuratorEdit(st.week, itemId, field, null, now(st).toISOString());
+  } else {
+    const n = normalizeEdit(candidate, field, value, st.timeZone);
+    if ("error" in n) return n;
+    st.edits.setCuratorEdit(st.week, itemId, field, n.value, now(st).toISOString());
+  }
+  return { item: withEdits(st, [candidate])[0]! };
+}
+
 /** What the curator should know about the picked items that the newsletter itself will not say. */
 export interface DraftNotes {
   held: Array<{ id: string; title: string; hold_note?: string }>;
   editorNotes: Array<{ id: string; title: string; notes: string[] }>;
+  /** Items whose wording the curator changed, and which parts, so no rewording is silent. */
+  edited: Array<{ id: string; title: string; fields: string[] }>;
 }
 
 export function notesFor(items: Item[]): DraftNotes {
   return {
     held: items.filter((i) => i.requires_review).map((i) => ({ id: i.id, title: i.title, ...(i.hold_note ? { hold_note: i.hold_note } : {}) })),
     editorNotes: items.filter((i) => i.editor_notes?.length).map((i) => ({ id: i.id, title: i.title, notes: i.editor_notes! })),
+    edited: items.filter((i) => i.edited_fields?.length).map((i) => ({ id: i.id, title: i.title, fields: i.edited_fields!.map((f) => (isEditField(f) ? EDIT_FIELD_LABEL[f as EditField] : f)) })),
   };
 }
 
@@ -145,7 +186,7 @@ export type BuildResult =
  */
 export function buildDraft(st: ReviewState, alerter: Alerter, ids: string[] = currentSelection(st)): BuildResult {
   const byId = new Map(st.candidates.map((c) => [c.item.id, c.item] as const));
-  const items = ids.map((id) => byId.get(id)).filter((x): x is Item => Boolean(x));
+  const items = withEdits(st, ids.map((id) => byId.get(id)).filter((x): x is Item => Boolean(x)));
   const notes = notesFor(items);
   if (items.length === 0) return { ok: false, reason: "nothing-selected", notes };
 
