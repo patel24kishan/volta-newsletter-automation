@@ -46,10 +46,15 @@ export interface Item {
   hold_note?: string;
   /** Who the item is about, e.g. "Yuki Tanaka, co-founder". */
   byline?: string;
+  /**
+   * Slack's permalink for the message this item came from, when it came from a Slack channel and
+   * its main link points elsewhere. For the curator's list only; never rendered into a newsletter.
+   */
+  message_link?: string;
 }
 
 /** The optional fields stored together as one JSON column. */
-export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline"] as const;
+export const EXTRA_FIELDS = ["insights", "editor_notes", "hold_note", "byline", "message_link"] as const;
 
 export interface RelatedLink {
   source: string;
@@ -95,6 +100,9 @@ export function validateItem(value: unknown): ValidationResult {
   }
   for (const key of ["hold_note", "byline"] as const) {
     if (it[key] !== undefined && typeof it[key] !== "string") errors.push(`${key} must be a string when present`);
+  }
+  if (it.message_link !== undefined && (typeof it.message_link !== "string" || !isAbsoluteHttpUrl(it.message_link))) {
+    errors.push("message_link must be an absolute http(s) link when present");
   }
   if ("related" in it && it.related !== undefined) {
     if (!Array.isArray(it.related)) errors.push("related must be an array when present");

@@ -20,10 +20,15 @@ const env = { SLACK_BOT_TOKEN: "xoxb-test" };
 /** Slack timestamp for a date, as the API returns it. */
 const ts = (iso: string) => `${Math.floor(Date.parse(iso) / 1000)}.000100`;
 
-function api(messages: Array<Record<string, unknown>>, users: Record<string, string> = { U1: "Jitakshi S." }, extra: Record<string, unknown> = {}) {
+const permalink = (channel: string, messageTs: string) => `https://volta.slack.com/archives/${channel}/p${messageTs.replace(".", "")}`;
+
+function api(messages: Array<Record<string, unknown>>, users: Record<string, string> = { U1: "Jitakshi S." }, extra: Record<string, unknown> = {}, opts: { permalinkFails?: boolean } = {}) {
   const calls: Array<{ method: string; params: Record<string, string> }> = [];
   const fn = async (method: string, params: Record<string, string>) => {
     calls.push({ method, params });
+    if (method === "chat.getPermalink") {
+      return opts.permalinkFails ? { ok: false, error: "message_not_found" } : { ok: true, permalink: permalink(params.channel!, params.message_ts!) };
+    }
     if (method === "users.info") {
       const name = users[params.user as string];
       return name ? { ok: true, user: { real_name: name } } : { ok: false, error: "user_not_found" };
@@ -57,6 +62,29 @@ describe("SlackChannelFetcher", () => {
     expect(calls[0]!.method).toBe("conversations.history");
     expect(Number(calls[0]!.params.oldest)).toBeCloseTo((Date.parse("2026-09-10T18:00:00Z")) / 1000, 0);
     expect(it.summary).not.toContain("<https://");
+  });
+
+  it("links back to the Slack message itself, using Slack's own permalink", async () => {
+    const at = ts("2026-09-16T14:00:00Z");
+    const { fn, calls } = api([{ type: "message", user: "U1", ts: at, text: "Great piece <https://cbc.ca/story>" }]);
+    const r = await fetcher.fetch(source, { config: cfg(), clock, slackApi: fn, env });
+    const it = r.items[0]!;
+    expect(it.link).toBe("https://cbc.ca/story"); // the story stays the main link
+    expect(it.message_link).toBe(permalink("C0ABCDEF", at));
+    expect(validateItem(it)).toEqual({ ok: true, errors: [] });
+    expect(calls.find((c) => c.method === "chat.getPermalink")!.params).toMatchObject({ channel: "C0ABCDEF", message_ts: at });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("keeps the item without a message link when Slack gives no permalink, and says so once", async () => {
+    const { fn } = api([
+      { type: "message", user: "U1", ts: ts("2026-09-16T14:00:00Z"), text: "<https://a.test/1>" },
+      { type: "message", user: "U1", ts: ts("2026-09-16T15:00:00Z"), text: "<https://b.test/2>" },
+    ], undefined, {}, { permalinkFails: true });
+    const r = await fetcher.fetch(source, { config: cfg(), clock, slackApi: fn, env });
+    expect(r.items).toHaveLength(2);
+    expect(r.items.every((i) => i.message_link === undefined)).toBe(true);
+    expect(r.warnings.filter((w) => /message link/.test(w))).toEqual(["2 message link(s) could not be fetched, so those items show only the shared link"]);
   });
 
   it("flags a bare link as needing a summary rather than inventing one", async () => {

@@ -78,6 +78,8 @@ function fold(target: Item, dup: Item): void {
   target.related ??= [];
   if (!target.related.some((r) => normalizeUrl(r.link) === normalizeUrl(rel.link))) target.related.push(rel);
   for (const r of dup.related ?? []) if (!target.related.some((x) => normalizeUrl(x.link) === normalizeUrl(r.link))) target.related.push(r);
+  // The way back to the member's Slack message survives the merge.
+  if (!target.message_link && dup.message_link) target.message_link = dup.message_link;
   if (target.summary === "" && dup.summary !== "") {
     target.summary = dup.summary;
     target.needs_summary = false;

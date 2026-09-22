@@ -94,7 +94,7 @@ describe("the candidate list", () => {
   it("labels the held item on its checkbox too, and never pre-ticks it", () => {
     const candidates = rankItems([held, clear], now);
     const blocks = reminderBlocks({ candidates, preselectedIds: [clear.id], firstWorkday: fw, timeZone: TZ, clockLabel: "real clock", sourceNotes: [] });
-    const group = blocks.find((b) => b.block_id === "select_0") as { accessory: { options: Array<{ text: { text: string }; value: string }>; initial_options?: Array<{ value: string }> } };
+    const group = blocks.find((b) => String(b.block_id ?? "").startsWith("select_")) as { accessory: { options: Array<{ text: { text: string }; value: string }>; initial_options?: Array<{ value: string }> } };
     const heldOption = group.accessory.options.find((o) => o.value === held.id)!;
     expect(heldOption.text.text).toMatch(new RegExp(`^\\d+\\. ${REVIEW_LABEL}: Bellwether Soil`));
     expect(heldOption.text.text.length).toBeLessThan(151);

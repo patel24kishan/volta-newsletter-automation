@@ -27,6 +27,16 @@ export function resolveClock(argv: string[] = process.argv.slice(2), env: NodeJS
   return { now: () => new Date(fixed.getTime()), overridden: true, label: `overridden to ${raw}` };
 }
 
+/**
+ * A clock that starts at a chosen instant and then keeps time. The frozen override above suits
+ * one-shot commands; a long-running service driven by it would never see time pass, so it could
+ * never reach the reminder. This one lets a rehearsal start at 08:28 and be watched sending at 08:30.
+ */
+export function advancingClock(start: Date, realNow: () => number = Date.now): Clock {
+  const offset = start.getTime() - realNow();
+  return { now: () => new Date(realNow() + offset), overridden: true, label: `starting at ${start.toISOString()} and moving forward` };
+}
+
 /** Wall-clock parts of an instant in a named timezone (Halifax), without a library. */
 export function partsInZone(d: Date, timeZone: string): { year: number; month: number; day: number; hour: number; minute: number; weekday: string } {
   const fmt = new Intl.DateTimeFormat("en-CA", {

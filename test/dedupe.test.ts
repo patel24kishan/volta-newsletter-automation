@@ -55,6 +55,15 @@ describe("dedupeItems", () => {
     expect(r.merges).toHaveLength(2);
   });
 
+  it("keeps the link to the member's Slack message when their share is folded into the same story", () => {
+    const news = sampleItem({ source: "google-news", type: "news", link: "https://news.test/story", title: "Volta launches new AI-focused program" });
+    const shared = sampleItem({ source: "member-links", type: "member_social", link: "https://news.test/story", title: "Look at this", message_link: "https://volta.slack.com/archives/C1/p1" });
+    const r = dedupeItems([shared, news], TZ);
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]!.source).toBe("google-news");
+    expect(r.items[0]!.message_link).toBe("https://volta.slack.com/archives/C1/p1");
+  });
+
   it("attaches the yoga post to the yoga event; the event survives", () => {
     const yoga = sampleItem({ type: "event", source: "volta-calendar", link: "https://eventbrite.ca/e/yoga", title: "Yoga", date: "2026-09-24T15:00:00Z", raw_excerpt: "Yoga Join us for a 1-hour guided yoga session." });
     const post = sampleItem({ type: "linkedin", source: "volta-linkedin", link: "https://linkedin.com/posts/y", title: "Will we see you next Thursday?", date: "2026-09-15T16:00:00Z", raw_excerpt: "On September 24, join us for a 1-hour guided yoga session with Jaimee." });

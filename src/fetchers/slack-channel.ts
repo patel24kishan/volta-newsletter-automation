@@ -52,6 +52,7 @@ export class SlackChannelFetcher implements Fetcher {
     const items: Item[] = [];
     const names = new Map<string, string>();
     let noLink = 0;
+    let noMessageLink = 0;
 
     for (const m of messages) {
       if (m.subtype !== undefined && m.subtype !== "file_share") continue; // joins, topic changes, bot noise
@@ -102,11 +103,16 @@ export class SlackChannelFetcher implements Fetcher {
         // Attribution matters here: the verifier must be able to trace the submitter's name.
         raw_excerpt: collapseWhitespace(`${who} shared: ${note || link}`),
       };
+      // A way back to the message itself, for Bader. Only Slack's own permalink, never a guessed one.
+      const messageLink = await permalinkFor(call, channel, ts);
+      if (messageLink) item.message_link = messageLink;
+      else noMessageLink++;
       if (links.length > 1) item.related = links.slice(1).map((l) => ({ source: source.id, link: l, title: `Also shared by ${who}` }));
       items.push(item);
     }
 
     items.sort((a, b) => b.date.localeCompare(a.date));
+    if (noMessageLink) warnings.push(`${noMessageLink} message link(s) could not be fetched, so those items show only the shared link`);
     if (noLink) warnings.push(`${noLink} message(s) had no link and were skipped`);
     if (res.has_more === true) warnings.push("the channel had more messages than one page; only the most recent 200 were read");
     return { source: source.id, items, warnings, bytes };

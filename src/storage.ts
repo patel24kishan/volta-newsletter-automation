@@ -28,7 +28,27 @@ export interface Storage {
   recordCampaign(id: string, draftKey: string): void;
   markCampaignSent(id: string): void;
   listCampaigns(): CampaignRecord[];
+  /**
+   * Take the right to do `task` for `period` (a week). Atomic, so of two processes asking at once
+   * only one gets it. A claim older than `ttlMs` that was never completed can be taken over, so a
+   * process that died mid-task does not block the task forever.
+   */
+  claimMark(task: string, period: string, nowIso: string, ttlMs: number): boolean;
+  /** Give a claim back, so the task can be tried again. */
+  releaseMark(task: string, period: string): void;
+  completeMark(task: string, period: string, nowIso: string): void;
+  getMark(task: string, period: string): ScheduleMark | undefined;
+  /** Keep work for `task` so a retry, even after a restart, need not repeat it. */
+  setMarkPayload(task: string, period: string, payload: string): void;
   close(): void;
+}
+
+export interface ScheduleMark {
+  task: string;
+  period: string;
+  claimed_at: string | null;
+  done_at: string | null;
+  payload: string | null;
 }
 
 /**
@@ -90,6 +110,14 @@ export class SqliteStorage implements Storage {
         draft_key TEXT NOT NULL,
         created_at TEXT NOT NULL,
         sent_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS schedule_marks (
+        task TEXT NOT NULL,
+        period TEXT NOT NULL,
+        claimed_at TEXT,
+        done_at TEXT,
+        payload TEXT,
+        PRIMARY KEY (task, period)
       );
     `);
     this.migrate();
@@ -213,6 +241,40 @@ export class SqliteStorage implements Storage {
 
   listCampaigns(): CampaignRecord[] {
     return this.db.prepare("SELECT id, draft_key, created_at, sent_at FROM campaigns ORDER BY created_at ASC").all() as unknown as CampaignRecord[];
+  }
+
+  claimMark(task: string, period: string, nowIso: string, ttlMs: number): boolean {
+    // A fresh row is ours outright. An existing one is ours only if unclaimed or its claim has
+    // gone stale, and it was never completed. Each statement is atomic in SQLite.
+    const inserted = this.db
+      .prepare("INSERT OR IGNORE INTO schedule_marks (task, period, claimed_at) VALUES (?, ?, ?)")
+      .run(task, period, nowIso);
+    if (Number(inserted.changes) > 0) return true;
+    const staleBefore = new Date(new Date(nowIso).getTime() - ttlMs).toISOString();
+    const taken = this.db
+      .prepare("UPDATE schedule_marks SET claimed_at = ? WHERE task = ? AND period = ? AND done_at IS NULL AND (claimed_at IS NULL OR claimed_at < ?)")
+      .run(nowIso, task, period, staleBefore);
+    return Number(taken.changes) > 0;
+  }
+
+  releaseMark(task: string, period: string): void {
+    this.db.prepare("UPDATE schedule_marks SET claimed_at = NULL WHERE task = ? AND period = ? AND done_at IS NULL").run(task, period);
+  }
+
+  completeMark(task: string, period: string, nowIso: string): void {
+    this.db
+      .prepare("INSERT INTO schedule_marks (task, period, done_at) VALUES (?, ?, ?) ON CONFLICT(task, period) DO UPDATE SET done_at = excluded.done_at")
+      .run(task, period, nowIso);
+  }
+
+  getMark(task: string, period: string): ScheduleMark | undefined {
+    return this.db.prepare("SELECT task, period, claimed_at, done_at, payload FROM schedule_marks WHERE task = ? AND period = ?").get(task, period) as ScheduleMark | undefined;
+  }
+
+  setMarkPayload(task: string, period: string, payload: string): void {
+    this.db
+      .prepare("INSERT INTO schedule_marks (task, period, payload) VALUES (?, ?, ?) ON CONFLICT(task, period) DO UPDATE SET payload = excluded.payload")
+      .run(task, period, payload);
   }
 
   close(): void {

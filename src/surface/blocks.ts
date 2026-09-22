@@ -51,6 +51,7 @@ type Block = Record<string, unknown>;
 
 export function reminderBlocks(input: ReminderInput): Block[] {
   const { candidates, preselectedIds, firstWorkday, timeZone } = input;
+  const week = firstWorkday.weekMonday;
   const pre = new Set(preselectedIds);
   const blocks: Block[] = [
     { type: "header", text: { type: "plain_text", text: "This week's newsletter is ready for you", emoji: false } },
@@ -73,7 +74,7 @@ export function reminderBlocks(input: ReminderInput): Block[] {
   blocks.push({
     type: "actions",
     block_id: "add_event_actions",
-    elements: [{ type: "button", action_id: ACTION.addEvent, text: { type: "plain_text", text: "Add an event", emoji: false }, value: "add_event" }],
+    elements: [{ type: "button", action_id: ACTION.addEvent, text: { type: "plain_text", text: "Add an event", emoji: false }, value: week }],
   });
 
   if (candidates.length === 0) {
@@ -97,7 +98,7 @@ export function reminderBlocks(input: ReminderInput): Block[] {
     if (initial.length) element.initial_options = initial;
     blocks.push({
       type: "section",
-      block_id: `${BLOCK_PREFIX.select}${i / CHECKBOX_LIMIT}`,
+      block_id: `${BLOCK_PREFIX.select}${week}_${i / CHECKBOX_LIMIT}`,
       text: { type: "mrkdwn", text: i === 0 ? "*Candidates*" : `*Candidates (continued)*` },
       accessory: element,
     });
@@ -105,12 +106,29 @@ export function reminderBlocks(input: ReminderInput): Block[] {
   blocks.push({
     type: "actions",
     block_id: "generate_actions",
-    elements: [{ type: "button", style: "primary", action_id: ACTION.generate, text: { type: "plain_text", text: "Generate drafts", emoji: false }, value: "generate" }],
+    // The week travels with the button: last week's list stays in the same DM, and pressing its
+    // Generate must not build this week's newsletter from last week's ticks.
+    elements: [{ type: "button", style: "primary", action_id: ACTION.generate, text: { type: "plain_text", text: "Generate drafts", emoji: false }, value: week }],
   });
   return blocks;
 }
 
-/** One line per candidate: "1. <link|Title> · event · Thursday 9/24 · +1 related". */
+/**
+ * The week a list's control belongs to: from a Generate value or a checkbox block id. Undefined
+ * for a message posted before lists carried their week, which is then treated as current, so a
+ * list already in Slack keeps working through the deploy that introduced this.
+ */
+export function weekOfControl(valueOrBlockId: string | undefined): string | undefined {
+  return /(\d{4}-\d{2}-\d{2})/.exec(valueOrBlockId ?? "")?.[1];
+}
+
+/** True when a control plainly belongs to a different week from the review now under way. */
+export function isFromAnotherWeek(currentWeek: string | undefined, valueOrBlockId: string | undefined): boolean {
+  const week = weekOfControl(valueOrBlockId);
+  return Boolean(week && currentWeek && week !== currentWeek);
+}
+
+/** One line per candidate: "1. <link|Title> · event · Thursday 9/24 · +1 related · <permalink|Slack message>". */
 function linkLine(c: RankedItem, n: number, timeZone: string): string {
   const it = c.item;
   const p = partsInZone(new Date(it.date), timeZone);
@@ -119,6 +137,8 @@ function linkLine(c: RankedItem, n: number, timeZone: string): string {
   if (isManualItem(it)) bits.push(MANUAL_LABEL);
   if (it.related?.length) bits.push(`+${it.related.length} related`);
   if (it.needs_summary) bits.push("needs summary");
+  // Last on the line: the member's Slack message, when the title links somewhere else.
+  if (it.message_link && it.message_link !== it.link) bits.push(`<${it.message_link}|Slack message>`);
   const head = `<${it.link}|${escapeMrkdwn(trim(it.title, 80))}> · ${bits.join(" · ")}`;
   if (!it.requires_review) return `${n}. ${head}`;
 

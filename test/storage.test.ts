@@ -41,7 +41,7 @@ describe("SqliteStorage", () => {
   });
 
   it("round-trips insights, editor notes, the hold note and the byline", () => {
-    const it = sampleItem({ requires_review: true, hold_note: "REVISIT w/c Sep 28 (embargo)", byline: "Marc Comeau, co-founder", insights: ["one", "two"], editor_notes: ["Confirm before publishing."] });
+    const it = sampleItem({ requires_review: true, hold_note: "REVISIT w/c Sep 28 (embargo)", byline: "Marc Comeau, co-founder", insights: ["one", "two"], editor_notes: ["Confirm before publishing."], message_link: "https://volta.slack.com/archives/C1/p1" });
     s.upsertItems([it]);
     expect(s.getItem(it.id)).toEqual(it);
     // An item without them comes back without them, not with empty placeholders.

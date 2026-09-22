@@ -49,6 +49,36 @@ describe("mrkdwn", () => {
   });
 });
 
+describe("a Slack candidate's line", () => {
+  const SLACK_MSG = "https://volta.slack.com/archives/C1/p1726495200000100";
+  /** The candidate's own line in the reminder. */
+  const lineOf = (item: ReturnType<typeof sampleItem>): string => {
+    const b = reminderBlocks({ candidates: rankItems([item], now), preselectedIds: [], firstWorkday: fw, timeZone: TZ, clockLabel: "test", sourceNotes: [] });
+    const texts = b.map((x) => (x.text as { text?: string } | undefined)?.text ?? "").join("\n").split("\n");
+    return texts.find((t) => t.startsWith("1. "))!;
+  };
+
+  it("ends with a link to the member's Slack message", () => {
+    const shared = sampleItem({ source: "member-links", type: "member_social", link: "https://cbc.ca/story", title: "Our founder on CBC", message_link: SLACK_MSG });
+    const line = lineOf(shared);
+    expect(line.startsWith("1. <https://cbc.ca/story|Our founder on CBC>")).toBe(true);
+    expect(line.endsWith(`<${SLACK_MSG}|Slack message>`)).toBe(true);
+  });
+
+  it("is absent for items not from Slack, and not repeated when the title already links to the message", () => {
+    expect(lineOf(sampleItem({ link: "https://news.test/a", title: "News" }))).not.toContain("Slack message");
+    expect(lineOf(sampleItem({ source: "member-links", link: SLACK_MSG, title: "Founder update", message_link: SLACK_MSG }))).not.toContain("Slack message");
+  });
+
+  it("never reaches the newsletter itself", () => {
+    const shared = sampleItem({ source: "member-links", type: "member_social", link: "https://cbc.ca/story", title: "Our founder on CBC", message_link: SLACK_MSG });
+    for (const d of buildDrafts([shared], { timeZone: TZ })) {
+      expect(d.markdown).not.toContain("slack.com");
+      expect(d.html).not.toContain("slack.com");
+    }
+  });
+});
+
 describe("reminderBlocks", () => {
   const blocks = reminderBlocks({ candidates, preselectedIds: candidates.slice(0, 3).map((c) => c.item.id), firstWorkday: fw, timeZone: TZ, clockLabel: "overridden to 2026-10-13", sourceNotes: ["google-news: empty"] });
 
@@ -86,7 +116,7 @@ describe("reminderBlocks", () => {
     // a long LinkedIn-style link and a long title never push a label over the limit
     const long = rankItems([sampleItem({ type: "linkedin", link: "https://www.linkedin.com/posts/voltaeffect_" + "x".repeat(120) + "-activity-7505656961221419008-qsNs", title: "T".repeat(300), raw_excerpt: "T".repeat(300) })], now);
     const lb = reminderBlocks({ candidates: long, preselectedIds: [], firstWorkday: fw, timeZone: TZ, clockLabel: "real clock", sourceNotes: [] });
-    const lo = (lb.find((b) => b.block_id === "select_0") as { accessory: { options: Array<{ text: { text: string } }> } }).accessory.options[0]!;
+    const lo = (lb.find((b) => String(b.block_id ?? "").startsWith("select_")) as { accessory: { options: Array<{ text: { text: string } }> } }).accessory.options[0]!;
     expect(lo.text.text.length).toBeLessThan(151);
     const empty = reminderBlocks({ candidates: [], preselectedIds: [], firstWorkday: fw, timeZone: TZ, clockLabel: "real clock", sourceNotes: [] });
     expect(JSON.stringify(empty)).toContain("No items were found");
