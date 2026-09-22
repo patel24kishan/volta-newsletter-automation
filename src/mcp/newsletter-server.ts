@@ -40,8 +40,10 @@ export const SERVER_NAME = "volta-newsletter";
 export const INSTRUCTIONS = `Volta's newsletter, reviewed by its curator (Bader) in this chat.
 
 Rules you must follow:
-- Never write newsletter text yourself. The newsletter is built only from the sources and from Bader's own words.
+- Never write newsletter text yourself, and never offer to write, rewrite or "fill in" copy for an item. The newsletter is built only from the sources and from Bader's own words. Every item already has what it prints (the "prints:" lines); nothing is missing that you need to supply.
+- Lines marked "note to editor (not printed)" are advice for Bader from the source. They never appear in the newsletter. Mention them only as notes for him to consider.
 - For edit_item and add_event, pass Bader's words exactly as he gave them. If he asks you to improve or shorten wording, suggest it in chat and only save it once he says to use it, word for word.
+- When Bader wants to see the candidates, show list_candidates' result as a list: every group heading, and every item with its [x] or [ ] tick, title and date. You may leave out ids and links. Do not replace the list with a summary or a selection of highlights.
 - Show a built draft's text exactly as returned, and give him the preview link. Do not summarise the draft in place of showing it.
 - Ask Bader before approve_draft and before send_campaign. Sending cannot be undone.
 
@@ -152,7 +154,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     return text([
       `Prepared the ${periodWord} of ${run.period}: ${run.candidates.length} candidates (${g.upcomingEvents.length} upcoming events, ${g.pastEvents.length} past events, ${g.other.length} news and updates), ${currentSelection(st).length} ticked.`,
       ...(notes.length ? ["Sources that need attention:", ...notes] : ["Every source answered."]),
-      "Next: list_candidates.",
+      "Next: call list_candidates and show Bader the list, group by group, with its ticks.",
     ].join("\n"));
   });
 
@@ -278,6 +280,12 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         case "saved": return text(`Approved and saved to ${r.files.html}. No email platform is configured, so nothing was created there.`);
         case "failed": return text(`Saved to ${r.files.html}, but creating the ${r.platform} campaign failed: ${r.error.message}`, true);
         case "already": return text(`Already approved. Campaign ${r.campaign.id} in ${r.campaign.platform}: ${r.campaign.editUrl}`);
+        case "updated": return text([
+          `Approved. This month's campaign ${r.campaign.id} in ${r.campaign.platform} was updated with the new version (still not sent)${r.campaign.editUrl ? `: ${r.campaign.editUrl}` : "."}`,
+          "Any changes Bader made directly in Mailchimp have been replaced by this version.",
+          `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once Bader says so.`,
+        ].join("\n"));
+        case "period-sent": return text(`This month's newsletter was already sent (campaign ${r.campaignId}), so this version was saved to ${r.files.html} but not applied anywhere.`, true);
         case "created": return text([
           `Approved. Campaign ${r.campaign.id} created in ${r.campaign.platform} (not sent): ${r.campaign.editUrl}`,
           `Audience: ${r.audience.audienceName} (${r.audience.memberCount} contacts).`,
@@ -326,7 +334,19 @@ export function describeItem(it: Item, ticked: boolean, timeZone: string): strin
   if (it.edited_fields?.length) bits.push(`edited by Bader: ${it.edited_fields.map((f) => EDIT_FIELD_LABEL[f as EditField] ?? f).join(", ")}`);
   if (it.image) bits.push("has an image");
   const lines = [`- ${bits.join(" | ")}`, `  id: ${it.id}`];
-  if (it.summary) lines.push(`  ${it.summary.length > 200 ? `${it.summary.slice(0, 197)}...` : it.summary}`);
+  const clip = (s: string) => (s.length > 200 ? `${s.slice(0, 197)}...` : s);
+  // What the newsletter would print for this item. A founder update prints its points, not its
+  // summary: that summary is the write-up's advice to the editor, so it is labelled as such here,
+  // or it reads as copy that is missing and invites someone to write it.
+  if (it.insights?.length) {
+    lines.push("  prints:", ...it.insights.map((p) => `    • ${clip(p)}`));
+    if (it.summary) lines.push(`  note to editor (not printed): ${clip(it.summary)}`);
+  } else if (it.summary) {
+    lines.push(`  prints: ${clip(it.summary)}`);
+  } else {
+    lines.push("  prints: the title only (the source gave no description)");
+  }
+  for (const n of it.editor_notes ?? []) lines.push(`  note to editor (not printed): ${clip(n)}`);
   lines.push(`  link: ${it.link}${it.message_link && it.message_link !== it.link ? ` | Slack message: ${it.message_link}` : ""}`);
   return lines.join("\n");
 }

@@ -42,7 +42,9 @@ class FakeMail implements Publisher {
   published: Draft[] = [];
   sent: string[] = [];
   async verify() { return { audienceName: "Test", memberCount: 2 }; }
+  updated: Array<{ id: string; draft: Draft }> = [];
   async publishDraft(d: Draft): Promise<PublishedCampaign> { this.published.push(d); return { id: `camp_${this.published.length}`, editUrl: "https://mc.test/e", platform: this.platform }; }
+  async updateDraft(id: string, draft: Draft) { this.updated.push({ id, draft }); }
   async send(id: string) { this.sent.push(id); }
 }
 
@@ -168,6 +170,35 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect((await c.call("send_campaign", { campaign_id: "camp_1", confirm: true })).text).toMatch(/already sent/);
     expect(mail.sent).toEqual(["camp_1"]);
     expect((await c.call("newsletter_status")).text).toMatch(/campaign camp_1 in Mailchimp/);
+    await c.close();
+  });
+
+  it("live: a change after approval updates the same campaign, and a sent month cannot be changed", async () => {
+    const mail = new FakeMail();
+    const c = await connect({ live: true, mail });
+    await c.call("prepare_month");
+    const key1 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    expect((await c.call("approve_draft", { draft_key: key1 })).text).toMatch(/Campaign camp_1 created/);
+
+    // Bader changes his mind: rewords the mixer, rebuilds, approves again.
+    const mixer = idOf((await c.call("list_candidates")).text, "Fall Mixer");
+    await c.call("edit_item", { item_id: mixer, field: "summary", text: "Drinks, demos and the whole fall cohort." });
+    const key2 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    const updated = await c.call("approve_draft", { draft_key: key2 });
+    expect(updated.text).toContain("campaign camp_1 in Mailchimp was updated with the new version (still not sent): https://mc.test/e");
+    expect(updated.text).toMatch(/changes Bader made directly in Mailchimp have been replaced/);
+    expect(mail.published).toHaveLength(1);
+    expect(mail.updated.map((u) => u.id)).toEqual(["camp_1"]);
+    expect(mail.updated[0]!.draft.html).toContain("Drinks, demos and the whole fall cohort.");
+
+    expect((await c.call("send_campaign", { campaign_id: "camp_1", confirm: true })).text).toBe("Sent via Mailchimp.");
+    await c.call("set_selection", { untick: [mixer] });
+    const key3 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    const refused = await c.call("approve_draft", { draft_key: key3 });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("already sent (campaign camp_1)");
+    expect(mail.updated).toHaveLength(1);
+    expect(mail.published).toHaveLength(1);
     await c.close();
   });
 

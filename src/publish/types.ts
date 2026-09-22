@@ -19,6 +19,11 @@ export interface Publisher {
   verify(): Promise<{ audienceName: string; memberCount: number }>;
   /** Creates a draft campaign with the approved content. Does not send. */
   publishDraft(draft: Draft): Promise<PublishedCampaign>;
+  /**
+   * Replaces the subject and content of a draft campaign created earlier, so a newsletter changed
+   * after approval stays one campaign. Only for campaigns not yet sent.
+   */
+  updateDraft?(campaignId: string, draft: Draft): Promise<void>;
   /** Sends the campaign to its audience. */
   send(campaignId: string): Promise<void>;
   /**

@@ -242,6 +242,18 @@ async function emailDraft(st: ReviewState, record: DraftRecord): Promise<Draft> 
   return { ...record.draft, html: d!.html };
 }
 
+/**
+ * The campaign an earlier approval created for this period, if any: the latest one, and whether it
+ * has been sent. Campaigns recorded before periods were kept have none, and are never matched.
+ */
+function periodCampaign(st: ReviewState): { id: string; editUrl: string; sent: boolean } | undefined {
+  if (!st.week || !st.session?.listCampaigns) return undefined;
+  const mine = st.session.listCampaigns().filter((c) => c.period === st.week);
+  const sent = mine.find((c) => c.sent_at !== null || st.sent?.has(c.id));
+  const pick = sent ?? mine.at(-1);
+  return pick ? { id: pick.id, editUrl: pick.edit_url ?? "", sent: Boolean(sent) } : undefined;
+}
+
 /** The draft waiting for approval, if any. */
 export function currentDraft(st: ReviewState): DraftRecord | undefined {
   return [...st.drafts.values()].at(-1);
@@ -252,7 +264,9 @@ export interface SavedFiles { html: string; md: string }
 export type ApproveResult =
   | { status: "missing" }
   | { status: "saved"; draft: Draft; files: SavedFiles; held: Item[] }
-  | { status: "created" | "already"; draft: Draft; files: SavedFiles; held: Item[]; campaign: { id: string; editUrl: string; platform: string }; audience: { audienceName: string; memberCount: number } }
+  | { status: "created" | "already" | "updated"; draft: Draft; files: SavedFiles; held: Item[]; campaign: { id: string; editUrl: string; platform: string }; audience: { audienceName: string; memberCount: number } }
+  /** This period's newsletter already went out: a changed draft is saved locally but not applied. */
+  | { status: "period-sent"; draft: Draft; files: SavedFiles; held: Item[]; campaignId: string }
   | { status: "failed"; draft: Draft; files: SavedFiles; held: Item[]; platform: string; error: Error };
 
 /**
@@ -276,6 +290,23 @@ export async function approve(st: ReviewState, key: string): Promise<ApproveResu
   if (record.campaign) return { status: "already", draft: d, files, held, campaign: record.campaign, audience };
 
   assertLive(`create the ${st.publisher.platform} campaign`, st.env);
+  // A newsletter changed after it was approved stays one campaign: the period's draft campaign is
+  // updated in place. Once that campaign has been sent, the month is done and nothing is changed.
+  const earlier = periodCampaign(st);
+  if (earlier?.sent) return { status: "period-sent", draft: d, files, held, campaignId: earlier.id };
+  if (earlier && st.publisher.updateDraft) {
+    const campaign = { id: earlier.id, editUrl: earlier.editUrl, platform: st.publisher.platform };
+    try {
+      const email = await emailDraft(st, record);
+      writeFileSync(files.html, email.html, "utf8");
+      await st.publisher.updateDraft(earlier.id, email);
+    } catch (e) {
+      return { status: "failed", draft: d, files, held, platform: st.publisher.platform, error: e as Error };
+    }
+    record.campaign = campaign;
+    persistSession(st);
+    return { status: "updated", draft: d, files, held, campaign, audience };
+  }
   let c: PublishedCampaign;
   try {
     const email = await emailDraft(st, record);
@@ -289,7 +320,7 @@ export async function approve(st: ReviewState, key: string): Promise<ApproveResu
   // be sent from here, and would sit in the email platform with nobody knowing why.
   record.campaign = { id: c.id, editUrl: c.editUrl, platform: c.platform };
   st.campaigns.add(c.id);
-  st.session?.recordCampaign(c.id, record.key);
+  st.session?.recordCampaign(c.id, record.key, st.week, c.editUrl);
   persistSession(st);
   return { status: "created", draft: d, files, held, campaign: record.campaign, audience };
 }

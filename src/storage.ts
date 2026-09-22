@@ -25,7 +25,8 @@ export interface Storage {
   loadSession(week: string): string | undefined;
   saveSession(week: string, state: string): void;
   /** A campaign Approve created. Recording it twice is harmless. */
-  recordCampaign(id: string, draftKey: string): void;
+  /** `period` ties the campaign to its month (or week), so a changed newsletter updates it instead of adding another. */
+  recordCampaign(id: string, draftKey: string, period?: string, editUrl?: string): void;
   markCampaignSent(id: string): void;
   listCampaigns(): CampaignRecord[];
   /**
@@ -74,6 +75,10 @@ export interface CampaignRecord {
   draft_key: string;
   created_at: string;
   sent_at: string | null;
+  /** The period it was approved for; null for campaigns recorded before this was kept. */
+  period: string | null;
+  /** Where the curator opens it in the platform's editor; null for older records. */
+  edit_url: string | null;
 }
 
 export class StorageError extends Error {}
@@ -158,6 +163,9 @@ export class SqliteStorage implements Storage {
     }
     // Events added before images existed get an empty one.
     const manual = new Set((this.db.prepare("PRAGMA table_info(manual_events)").all() as Array<{ name: string }>).map((c) => c.name));
+    const campaigns = new Set((this.db.prepare("PRAGMA table_info(campaigns)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!campaigns.has("period")) this.db.exec("ALTER TABLE campaigns ADD COLUMN period TEXT");
+    if (!campaigns.has("edit_url")) this.db.exec("ALTER TABLE campaigns ADD COLUMN edit_url TEXT");
     if (!manual.has("image")) this.db.exec("ALTER TABLE manual_events ADD COLUMN image TEXT NOT NULL DEFAULT ''");
   }
 
@@ -256,10 +264,10 @@ export class SqliteStorage implements Storage {
       .run(week, state, new Date().toISOString());
   }
 
-  recordCampaign(id: string, draftKey: string): void {
+  recordCampaign(id: string, draftKey: string, period?: string, editUrl?: string): void {
     this.db
-      .prepare("INSERT OR IGNORE INTO campaigns (id, draft_key, created_at, sent_at) VALUES (?, ?, ?, NULL)")
-      .run(id, draftKey, new Date().toISOString());
+      .prepare("INSERT OR IGNORE INTO campaigns (id, draft_key, created_at, sent_at, period, edit_url) VALUES (?, ?, ?, NULL, ?, ?)")
+      .run(id, draftKey, new Date().toISOString(), period ?? null, editUrl ?? null);
   }
 
   markCampaignSent(id: string): void {
@@ -281,7 +289,7 @@ export class SqliteStorage implements Storage {
   }
 
   listCampaigns(): CampaignRecord[] {
-    return this.db.prepare("SELECT id, draft_key, created_at, sent_at FROM campaigns ORDER BY created_at ASC").all() as unknown as CampaignRecord[];
+    return this.db.prepare("SELECT id, draft_key, created_at, sent_at, period, edit_url FROM campaigns ORDER BY created_at ASC").all() as unknown as CampaignRecord[];
   }
 
   claimMark(task: string, period: string, nowIso: string, ttlMs: number): boolean {

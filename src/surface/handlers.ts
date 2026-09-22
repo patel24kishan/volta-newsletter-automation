@@ -43,7 +43,7 @@ export interface SurfaceState {
   /** The reminder as posted, so an added event can be merged into that same message. */
   reminder?: { input: ReminderInput; channel: string; ts?: string; sentAt?: string };
   /** Where the review is saved so a restart does not lose it. Absent means nothing is saved. */
-  session?: Pick<Storage, "saveSession" | "recordCampaign" | "markCampaignSent">;
+  session?: Pick<Storage, "saveSession" | "recordCampaign" | "markCampaignSent"> & Partial<Pick<Storage, "listCampaigns">>;
   /**
    * The period this review belongs to, which it is saved under: the Monday of the week (weekly) or
    * the month, such as 2026-10 (monthly). Named `week` from when every newsletter was weekly.
@@ -203,6 +203,12 @@ export async function approveDraft(client: SlackClient, channel: string, draftKe
       throw r.error;
     case "already":
       await client.postMessage({ channel, text: `Already approved: ${r.draft.name}. Its campaign is in ${r.campaign.platform}: ${r.campaign.editUrl}`, blocks: approvedBlocks(r.draft, r.files, { ...r.campaign, ...r.audience }, r.held), ...thread });
+      return r.files;
+    case "period-sent":
+      await client.postMessage({ channel, text: `This newsletter was already sent (campaign ${r.campaignId}). The new version was saved to ${r.files.html} but not applied.`, ...thread });
+      return r.files;
+    case "updated":
+      await client.postMessage({ channel, text: `Approved: ${r.draft.name}. The existing campaign in ${r.campaign.platform} was updated; edits made there directly were replaced.`, blocks: approvedBlocks(r.draft, r.files, { ...r.campaign, ...r.audience }, r.held), ...thread });
       return r.files;
     case "created":
       await client.postMessage({ channel, text: `Approved: ${r.draft.name}. Campaign created in ${r.campaign.platform}: ${r.campaign.editUrl}`, blocks: approvedBlocks(r.draft, r.files, { ...r.campaign, ...r.audience }, r.held), ...thread });

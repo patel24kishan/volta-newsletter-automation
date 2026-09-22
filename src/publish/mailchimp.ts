@@ -1,9 +1,10 @@
 /**
- * Mailchimp Marketing API v3 publisher. Boring and documented: three calls.
- *   POST /campaigns                 create a regular campaign addressed to the audience id
- *   PUT  /campaigns/{id}/content    set the HTML
- *   POST /campaigns/{id}/actions/send
- *   POST /file-manager/files        host an image the curator attached to an event
+ * Mailchimp Marketing API v3 publisher. Boring and documented calls only.
+ *   POST  /campaigns                 create a regular campaign addressed to the audience id
+ *   PUT   /campaigns/{id}/content    set the HTML
+ *   PATCH /campaigns/{id}            change the subject of a draft approved again after a change
+ *   POST  /campaigns/{id}/actions/send
+ *   POST  /file-manager/files        host an image the curator attached to an event
  * The data centre comes from the API key suffix ("-us21"). Auth is HTTP Basic with the key.
  * Recipient addresses never pass through here (constraint 9).
  */
@@ -61,6 +62,13 @@ export class MailchimpPublisher implements Publisher {
     const r = (await this.call("POST", "/file-manager/files", { name: file.name, file_data: file.bytes.toString("base64") }, "upload image")) as { full_size_url?: string };
     if (!r.full_size_url) throw new MailchimpError(200, "the response had no full_size_url for the image", "upload image");
     return r.full_size_url;
+  }
+
+  async updateDraft(campaignId: string, draft: Draft): Promise<void> {
+    await this.call("PATCH", `/campaigns/${campaignId}`, {
+      settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.cfg.fromName, reply_to: this.cfg.replyTo },
+    }, "update campaign");
+    await this.call("PUT", `/campaigns/${campaignId}/content`, { html: draft.html }, "set campaign content");
   }
 
   async send(campaignId: string): Promise<void> {
