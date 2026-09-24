@@ -594,3 +594,45 @@ describe("a source that failed is not left looking healthy", () => {
     }
   });
 });
+
+describe("a refresh, as Bader sees it afterwards", () => {
+  const BARE_LI = `<html><body><a href="https://www.linkedin.com/posts/voltaeffect_still-time-to-get-in-on-this-one-the-activity-7507378018713600000-qA1x">x</a></body></html>`;
+
+  it("unticks an item that is now marked for review, so the label is not hidden by a tick", async () => {
+    BODIES["https://li.test/company"] = BARE_LI;
+    try {
+      const c = await connect();
+      await c.call("add_source", { kind: "linkedin_company", url: "https://li.test/company", name: "Volta on LinkedIn", check: false });
+      await c.call("prepare_month", { force: true });
+      const list = await c.call("list_candidates");
+      const id = /id: (cur_volta-on-linkedin:[^\s]+)/.exec(list.text)?.[1];
+      expect(id, "the bare LinkedIn post should be a candidate").toBeDefined();
+
+      // He ticks it anyway, then the month is fetched again: the review label must not be hidden.
+      await c.call("set_selection", { select: [id!] });
+      await c.call("prepare_month", { force: true });
+      const after = await c.call("list_candidates");
+      expect(after.text).toContain("0 of");
+      expect(after.text).toContain("[ ] MARKED FOR REVIEW");
+      await c.close();
+    } finally {
+      delete BODIES["https://li.test/company"];
+    }
+  });
+
+  it("says a source's trouble once, however many warnings mean the same thing", async () => {
+    BODIES["https://li.test/company"] = BARE_LI;
+    try {
+      const c = await connect();
+      // Two warnings from one source ("fell back to permalinks" and "came with no text") say the
+      // same thing to him.
+      await c.call("add_source", { kind: "linkedin_company", url: "https://li.test/company", name: "Volta on LinkedIn", check: false });
+      const prepared = await c.call("prepare_month", { force: true });
+      const linkedIn = prepared.text.split("\n").filter((l) => l.includes("gave only links"));
+      expect(linkedIn).toHaveLength(1);
+      await c.close();
+    } finally {
+      delete BODIES["https://li.test/company"];
+    }
+  });
+});

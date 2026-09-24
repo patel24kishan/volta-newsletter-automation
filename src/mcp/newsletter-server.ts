@@ -146,7 +146,12 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const run = await d.runPeriod();
     const ticked = currentSelection(st);
     startReview(st, {
-      candidates: run.candidates, preselectedIds: prepared(st) ? ticked.filter((id) => run.candidates.some((c) => c.item.id === id)) : run.preselected_ids,
+      // A refresh keeps what he ticked, except for anything now marked for review: that label
+      // exists to be seen before an item is used, and a kept tick would hide it.
+      candidates: run.candidates,
+      preselectedIds: prepared(st)
+        ? ticked.filter((id) => run.candidates.some((c) => c.item.id === id && !c.item.requires_review))
+        : run.preselected_ids,
       firstWorkday: run.first_workday, period: run.period, timeZone: tz, clockLabel: d.clock.label,
       // Every source, warnings included: a later surface cannot tell a quiet month from a month
       // whose items were all thrown away unless the numbers travel with the note.
@@ -205,8 +210,15 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         // The explanation already carried the count; repeating the raw warning says it twice.
         continue;
       }
-      // It answered and gave items: only worth a line if what it gave is unusable.
-      for (const w of said) lines.push(`- ${o.name ?? n.id} answered, but ${plainWarning(w)}${f?.link ? ` (${f.link})` : ""}`);
+      // It answered and gave items: only worth a line if what it gave is unusable. Two warnings
+      // can say the same thing in his words ("gave only links"), and he should read it once.
+      const seen = new Set<string>();
+      for (const w of said) {
+        const plain = plainWarning(w);
+        if (seen.has(plain)) continue;
+        seen.add(plain);
+        lines.push(`- ${o.name ?? n.id} answered, but ${plain}${f?.link ? ` (${f.link})` : ""}`);
+      }
     }
     return lines;
   }
@@ -776,7 +788,9 @@ export function panelItem(it: Item, ticked: boolean, timeZone: string, now?: Dat
     : dateLocal;
   const hasPoints = Boolean(it.insights?.length);
   const prints = hasPoints ? it.insights! : it.summary ? [it.summary] : [];
-  const notes = [...(hasPoints && it.summary ? [it.summary] : []), ...(it.editor_notes ?? [])];
+  // The summary is only worth adding when it says something the points do not.
+  const alreadySaid = hasPoints && it.summary ? prints.join(" ").includes(it.summary.trim()) : false;
+  const notes = [...(hasPoints && it.summary && !alreadySaid ? [it.summary] : []), ...(it.editor_notes ?? [])];
   return {
     id: it.id, title: it.title, ticked, isEvent, when, dateLocal, timeLocal: `${pad(p.hour)}:${pad(p.minute)}`,
     ...(it.location ? { location: it.location } : {}), held: it.requires_review, ...(it.hold_note ? { holdNote: it.hold_note } : {}),
