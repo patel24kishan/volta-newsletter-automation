@@ -24,7 +24,13 @@ export class ManualEventsFetcher implements Fetcher {
     const { upcoming, past } = windowsOf(ctx);
     let events;
     try {
-      events = storage.listManualEvents((past?.from ?? upcoming.from).toISOString(), upcoming.to.toISOString());
+      // No upper bound, unlike every other source. An event the curator typed is a decision, not a
+      // listing that happened to fall in range: one dated past the end of this period used to be
+      // read once (it is a candidate the moment it is added), printed in the draft he built, and
+      // then dropped by this query on the next refresh, with nothing said. He had added it so that
+      // it would go out. The look back still applies, so an event that has been and gone ages off
+      // on its own; only the future is open-ended.
+      events = storage.listManualEvents((past?.from ?? upcoming.from).toISOString());
     } catch (e) {
       return { source: source.id, items: [], warnings: [], error: `could not read manually added events: ${(e as Error).message}`, bytes: 0 };
     }

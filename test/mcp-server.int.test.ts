@@ -328,6 +328,37 @@ describe("the newsletter tools, as Claude uses them", () => {
   });
 });
 
+describe("an event Bader added for a later month", () => {
+  /**
+   * The month reads a fixed span of time, and every source is held to it. An event he typed was
+   * held to it too: added in October for December, it was a candidate at once and printed in the
+   * draft he built, then the next refresh read the manual events for this month only and it was
+   * gone, with nothing said. He was left with a newsletter missing the event he had added to it.
+   * His own entries are decisions rather than listings, so the future is now open-ended for them.
+   */
+  it("survives a refresh and reaches the newsletter, however far ahead it is", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+
+    // December, well past the end of the October window this run reads.
+    const added = await c.call("add_event", { title: "Winter Showcase", date: "2026-12-05", time: "18:00", link: "https://voltaeffect.com/winter" });
+    expect(added.isError).toBeFalsy();
+    const id = idOf((await c.call("list_candidates")).text, "Winter Showcase");
+
+    await c.call("prepare_month", { force: true });
+    const listed = (await c.call("list_candidates")).text;
+    expect(listed, "the refresh must not quietly drop it").toContain("Winter Showcase");
+    expect(listed).toContain(id);
+
+    await c.call("set_selection", { tick: [id] });
+    const draft = (await c.call("build_draft")).text;
+    expect(draft).toContain("Winter Showcase");
+    // In what is coming up, not in what was held: it has not happened yet.
+    expect(draft.indexOf("Winter Showcase")).toBeGreaterThan(draft.indexOf("## Upcoming events"));
+    await c.close();
+  });
+});
+
 describe("an event Bader added and then wants to correct", () => {
   it("is fixed in place and can be removed, so it is never added twice", async () => {
     const c = await connect();

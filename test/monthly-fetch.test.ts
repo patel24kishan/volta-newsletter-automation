@@ -60,7 +60,12 @@ describe("the calendar, monthly", () => {
 });
 
 describe("manually added events, monthly", () => {
-  it("include last month's as well as this month's", async () => {
+  /**
+   * The look back bounds the past, so August has aged off. Nothing bounds the future: an event the
+   * curator typed for November is his decision to print it, and a refresh that quietly dropped it
+   * left him with a newsletter missing the event he had just added to it.
+   */
+  it("include last month's and this month's, and one he typed for a later month", async () => {
     const storage = new SqliteStorage(":memory:");
     try {
       const add = (title: string, starts_at: string) => storage.addManualEvent({ title, starts_at, location: "", description: "", link: "" });
@@ -70,7 +75,9 @@ describe("manually added events, monthly", () => {
       add("In November", "2026-11-05T22:00:00.000Z");
       const source: SourceConfig = { id: "manual-events", kind: "manual", type: "event", url: "", enabled: true, fallback_link: "https://voltaeffect.com/events" };
       const r = await new ManualEventsFetcher().fetch(source, { config: cfg(), clock, storage });
-      expect(r.items.map((i) => i.title).sort()).toEqual(["Coming in October", "Held in September"]);
+      expect(r.items.map((i) => i.title).sort()).toEqual(["Coming in October", "Held in September", "In November"]);
+      // Still filed correctly: only September has been and gone.
+      expect(r.items.filter((i) => i.event_timing === "past").map((i) => i.title)).toEqual(["Held in September"]);
     } finally {
       storage.close();
     }

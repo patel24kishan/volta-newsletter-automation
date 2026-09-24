@@ -43,6 +43,9 @@ describe("storing an event the curator added", () => {
     storage.addManualEvent({ title: "Sooner", starts_at: "2026-09-23T18:00:00.000Z" });
     storage.addManualEvent({ title: "Way out", starts_at: "2026-12-01T18:00:00.000Z" });
     expect(storage.listManualEvents(NOW, "2026-10-05T12:00:00Z").map((e) => e.title)).toEqual(["Sooner", "Later"]);
+    // With no end given, everything from that moment on: what the manual fetcher asks for, so an
+    // event the curator typed for a later month is not quietly left out of his own newsletter.
+    expect(storage.listManualEvents(NOW).map((e) => e.title)).toEqual(["Sooner", "Later", "Way out"]);
   });
 
   it("refuses an invalid event rather than storing it", () => {
@@ -123,12 +126,20 @@ describe("the manual events fetcher", () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it("shows only events between now and the end of the events window", async () => {
+  /**
+   * The look back applies, so an event that has been and gone ages off on its own. The future does
+   * not: an event the curator typed for next month used to be a candidate the moment he added it,
+   * printed in the draft he built from it, and then dropped here on the next refresh with nothing
+   * said. He typed it so that it would go out, which is not a thing a date range should overrule.
+   */
+  it("drops an event already held, and keeps one dated past the end of the window", async () => {
     storage.addManualEvent({ title: "Already happened", starts_at: "2026-09-10T22:00:00.000Z" });
     storage.addManualEvent({ title: "This week", starts_at: "2026-09-25T22:00:00.000Z" });
     storage.addManualEvent({ title: "Beyond the window", starts_at: "2026-11-30T22:00:00.000Z" });
     const r = await new ManualEventsFetcher().fetch(SOURCE, ctx(storage));
-    expect(r.items.map((i) => i.title)).toEqual(["This week"]);
+    expect(r.items.map((i) => i.title)).toEqual(["This week", "Beyond the window"]);
+    // Both are still to come, so neither is filed under what was held.
+    expect(r.items.map((i) => i.event_timing)).toEqual(["upcoming", "upcoming"]);
   });
 
   it("gives the same title on two dates two separate ids", async () => {

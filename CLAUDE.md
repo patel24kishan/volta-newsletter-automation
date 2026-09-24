@@ -36,6 +36,8 @@ Reminders and sends key off the first workday of the period: the first weekday o
 
 News, LinkedIn, Slack and past events cover the previous calendar month up to the run; upcoming events cover the rest of the send month. Past and upcoming events are never mixed, in the list or in the newsletter.
 
+Events the curator adds himself are not bound by the upcoming window: an entry he typed is a decision to print it, and is offered until it has been held.
+
 ## 6. Secrets
 
 - Names of every secret live in `.env.example`. Values never enter the repo. `.env` is git-ignored.

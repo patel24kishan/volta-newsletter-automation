@@ -20,7 +20,8 @@ export interface Storage {
   /** Save an event the curator entered by hand. Throws StorageError if it is invalid. */
   addManualEvent(input: NewManualEvent): ManualEvent;
   /** Hand-added events starting within [fromIso, toIso], earliest first. */
-  listManualEvents(fromIso: string, toIso: string): ManualEvent[];
+  /** Events starting at or after `fromIso`. Leave `toIso` out for everything from then on. */
+  listManualEvents(fromIso: string, toIso?: string): ManualEvent[];
   /** Forget a hand-added event. False when there was no such event. */
   deleteManualEvent(id: string): boolean;
   /** The week's Slack session as saved, raw; session.ts owns its shape and checks it. */
@@ -303,11 +304,15 @@ export class SqliteStorage implements Storage {
     return event;
   }
 
-  listManualEvents(fromIso: string, toIso: string): ManualEvent[] {
+  listManualEvents(fromIso: string, toIso?: string): ManualEvent[] {
     const from = new Date(fromIso).toISOString();
+    const columns = "SELECT id, title, starts_at, location, description, link, image, created_at FROM manual_events";
+    if (toIso === undefined) {
+      return this.db.prepare(`${columns} WHERE starts_at >= ? ORDER BY starts_at ASC`).all(from) as unknown as ManualEvent[];
+    }
     const to = new Date(toIso).toISOString();
     return this.db
-      .prepare("SELECT id, title, starts_at, location, description, link, image, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
+      .prepare(`${columns} WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC`)
       .all(from, to) as unknown as ManualEvent[];
   }
 
