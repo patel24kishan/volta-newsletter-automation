@@ -19,8 +19,7 @@ export interface Storage {
   countItems(): number;
   /** Save an event the curator entered by hand. Throws StorageError if it is invalid. */
   addManualEvent(input: NewManualEvent): ManualEvent;
-  /** Hand-added events starting within [fromIso, toIso], earliest first. */
-  /** Events starting at or after `fromIso`. Leave `toIso` out for everything from then on. */
+  /** Hand-added events starting at or after `fromIso`, earliest first. Leave `toIso` out for everything from then on. */
   listManualEvents(fromIso: string, toIso?: string): ManualEvent[];
   /** Forget a hand-added event. False when there was no such event. */
   deleteManualEvent(id: string): boolean;
@@ -31,6 +30,8 @@ export interface Storage {
   /** `period` ties the campaign to its month (or week), so a changed newsletter updates it instead of adding another. */
   recordCampaign(id: string, draftKey: string, period?: string, editUrl?: string): void;
   markCampaignSent(id: string): void;
+  /** Forget a campaign the platform no longer has, so the period is not stuck on an id that is gone. */
+  forgetCampaign(id: string): boolean;
   listCampaigns(): CampaignRecord[];
   /**
    * Take the right to do `task` for `period` (a week). Atomic, so of two processes asking at once
@@ -341,6 +342,12 @@ export class SqliteStorage implements Storage {
 
   markCampaignSent(id: string): void {
     this.db.prepare("UPDATE campaigns SET sent_at = ? WHERE id = ? AND sent_at IS NULL").run(new Date().toISOString(), id);
+  }
+
+  forgetCampaign(id: string): boolean {
+    // Only ever called once the platform has said the campaign is not there. Nothing local depends
+    // on the row afterwards: what was sent is already sent, and what was never created cannot be.
+    return this.db.prepare("DELETE FROM campaigns WHERE id = ?").run(id).changes > 0;
   }
 
   setCuratorEdit(period: string, itemId: string, field: string, value: string | null, nowIso: string): void {

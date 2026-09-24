@@ -16,7 +16,7 @@ import { buildDrafts, offeredSections, type Draft, type DraftOptions } from "../
 import { isManualItem, itemFromManualEvent, manualEventFromFields, MANUAL_REF_PREFIX, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
 import { rankItems, type RankedItem } from "../pipeline/rank.js";
 import type { Violation } from "../pipeline/verify.js";
-import type { PublishedCampaign } from "../publish/types.js";
+import { campaignGone, type CampaignState, type PublishedCampaign } from "../publish/types.js";
 import { assertLive } from "../runtime.js";
 import { isPastEvent, type Item } from "../schema.js";
 import type { ReminderInput } from "../surface/blocks.js";
@@ -341,39 +341,89 @@ export async function approve(st: ReviewState, key: string): Promise<ApproveResu
   if (record.campaign) return { status: "already", draft: d, files, held, campaign: record.campaign, audience };
 
   assertLive(`create the ${st.publisher.platform} campaign`, st.env);
+
+  const createCampaign = async (): Promise<ApproveResult> => {
+    let c: PublishedCampaign;
+    try {
+      const email = await emailDraft(st, record);
+      // What is saved locally matches what the platform received.
+      writeFileSync(files.html, email.html, "utf8");
+      c = await st.publisher!.publishDraft(email);
+    } catch (e) {
+      return { status: "failed", draft: d, files, held, platform: st.publisher!.platform, error: e as Error };
+    }
+    // Remembered before anything else can fail: a campaign the app forgot it created could never
+    // be sent from here, and would sit in the email platform with nobody knowing why.
+    record.campaign = { id: c.id, editUrl: c.editUrl, platform: c.platform };
+    st.campaigns.add(c.id);
+    st.session?.recordCampaign(c.id, record.key, st.week, c.editUrl);
+    persistSession(st);
+    return { status: "created", draft: d, files, held, campaign: record.campaign, audience };
+  };
+
   // A newsletter changed after it was approved stays one campaign: the period's draft campaign is
   // updated in place. Once that campaign has been sent, the month is done and nothing is changed.
+  //
+  // Which of those applies is settled by asking the platform rather than by trusting what was
+  // recorded here, because the record has been wrong in both directions. A campaign deleted in
+  // Mailchimp left this side updating an id that no longer existed, and the month could never be
+  // approved again: every attempt answered "Resource Not Found", which the curator can neither
+  // understand nor fix. A campaign sent from Mailchimp's own editor left this side believing it
+  // was still a draft, and the guard against rewriting a newsletter subscribers have received
+  // reads exactly that flag.
   const earlier = periodCampaign(st);
+  // A send recorded here is final and is never re-checked. Deleting a campaign in the platform does
+  // not un-send it: the emails have gone. Asking first would answer "missing" for a deleted campaign
+  // that had already gone out, and this month would be published to subscribers a second time.
   if (earlier?.sent) return { status: "period-sent", draft: d, files, held, campaignId: earlier.id };
-  if (earlier && st.publisher.updateDraft) {
+
+  const onPlatform = earlier ? await platformState(st, earlier) : undefined;
+  if (earlier && onPlatform === "sent") {
+    // Sent from the platform's own editor, which this side had no way of knowing. Written down, so
+    // the refusal holds next time even if the platform cannot be reached, or is no longer keeping
+    // the campaign at all.
+    (st.sent ??= new Set()).add(earlier.id);
+    st.session?.markCampaignSent(earlier.id);
+    return { status: "period-sent", draft: d, files, held, campaignId: earlier.id };
+  }
+
+  const forget = (id: string) => {
+    st.campaigns.delete(id);
+    st.session?.forgetCampaign?.(id);
+  };
+  if (earlier && onPlatform === "missing") forget(earlier.id);
+  else if (earlier && st.publisher.updateDraft) {
     const campaign = { id: earlier.id, editUrl: earlier.editUrl, platform: st.publisher.platform };
     try {
       const email = await emailDraft(st, record);
       writeFileSync(files.html, email.html, "utf8");
       await st.publisher.updateDraft(earlier.id, email);
+      record.campaign = campaign;
+      persistSession(st);
+      return { status: "updated", draft: d, files, held, campaign, audience };
     } catch (e) {
-      return { status: "failed", draft: d, files, held, platform: st.publisher.platform, error: e as Error };
+      // Deleted between the question and the answer. Anything else is a real failure: retrying it
+      // as a fresh campaign would leave two for the month, which is worse than saying so.
+      if (!campaignGone(e)) return { status: "failed", draft: d, files, held, platform: st.publisher.platform, error: e as Error };
+      forget(earlier.id);
     }
-    record.campaign = campaign;
-    persistSession(st);
-    return { status: "updated", draft: d, files, held, campaign, audience };
   }
-  let c: PublishedCampaign;
+  return createCampaign();
+}
+
+/**
+ * What the platform holds for the period's campaign. Only ever asked about a campaign this side
+ * has no record of sending. When it cannot be asked — no such call on this publisher, or the
+ * platform is unreachable — it is treated as the draft this side believes it to be, which keeps
+ * the old behaviour rather than inventing a second campaign for the month on a bad connection.
+ */
+async function platformState(st: ReviewState, earlier: { id: string }): Promise<CampaignState> {
+  if (!st.publisher?.campaignState) return "draft";
   try {
-    const email = await emailDraft(st, record);
-    // What is saved locally matches what the platform received.
-    writeFileSync(files.html, email.html, "utf8");
-    c = await st.publisher.publishDraft(email);
-  } catch (e) {
-    return { status: "failed", draft: d, files, held, platform: st.publisher.platform, error: e as Error };
+    return await st.publisher.campaignState(earlier.id);
+  } catch {
+    return "draft";
   }
-  // Remembered before anything else can fail: a campaign the app forgot it created could never
-  // be sent from here, and would sit in the email platform with nobody knowing why.
-  record.campaign = { id: c.id, editUrl: c.editUrl, platform: c.platform };
-  st.campaigns.add(c.id);
-  st.session?.recordCampaign(c.id, record.key, st.week, c.editUrl);
-  persistSession(st);
-  return { status: "created", draft: d, files, held, campaign: record.campaign, audience };
 }
 
 export type SendResult = { status: "sent"; platform: string } | { status: "no-platform" | "already-sent" | "unknown" };

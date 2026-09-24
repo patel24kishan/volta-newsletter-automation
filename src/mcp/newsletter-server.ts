@@ -509,14 +509,27 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
             : `Nothing has been built for this ${periodWord} yet, so there is no draft to approve. Build one with build_draft first.`, true);
         }
         case "saved": return text(`Approved and saved to ${r.files.html}. No email platform is configured, so nothing was created there.`);
-        case "failed": return text(`Saved to ${r.files.html}, but creating the ${r.platform} campaign failed: ${r.error.message}`, true);
+        // Never only the platform's own sentence. Whatever went wrong, Bader is told that his work
+        // is safe, that nothing went out, and what to do next — otherwise he is left holding a
+        // developer's error message with no idea whether the newsletter survived.
+        case "failed": return text([
+          `${r.platform} would not take the newsletter just now, so nothing was created there and nothing was sent.`,
+          `Your draft is safe: it is still here, and it is saved at ${r.files.html}.`,
+          "Try approving again in a minute. If it keeps failing, send the maintainer this line:",
+          `  ${r.error.message}`,
+        ].join("\n"), true);
         case "already": return text(`Already approved. Campaign ${r.campaign.id} in ${r.campaign.platform}: ${r.campaign.editUrl}`);
         case "updated": return text([
           `Approved. This month's campaign ${r.campaign.id} in ${r.campaign.platform} was updated with the new version (still not sent)${r.campaign.editUrl ? `: ${r.campaign.editUrl}` : "."}`,
           "Any changes Bader made directly in Mailchimp have been replaced by this version.",
           `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once Bader says so.`,
         ].join("\n"));
-        case "period-sent": return text(`This month's newsletter was already sent (campaign ${r.campaignId}), so this version was saved to ${r.files.html} but not applied anywhere.`, true);
+        // Reached now when Mailchimp says so, not only when this side remembered it — including a
+        // send made from Mailchimp's own editor, which this side had no way of knowing about.
+        case "period-sent": return text([
+          `This ${periodWord}'s newsletter has already gone out (campaign ${r.campaignId}), so it cannot be changed: subscribers have it.`,
+          `This version was saved to ${r.files.html} and applied nowhere.`,
+        ].join("\n"), true);
         case "created": return text([
           `Approved. Campaign ${r.campaign.id} created in ${r.campaign.platform} (not sent): ${r.campaign.editUrl}`,
           `Audience: ${r.audience.audienceName} (${r.audience.memberCount} contacts).`,

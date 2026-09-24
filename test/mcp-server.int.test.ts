@@ -14,7 +14,7 @@ import { resolveClock } from "../src/clock.js";
 import type { Config } from "../src/config.js";
 import type { Draft } from "../src/draft/templates.js";
 import { createNewsletterServer, INSTRUCTIONS } from "../src/mcp/newsletter-server.js";
-import type { PublishedCampaign, Publisher } from "../src/publish/types.js";
+import type { CampaignState, PublishedCampaign, Publisher } from "../src/publish/types.js";
 import { runWeek } from "../src/run-week.js";
 import { SqliteStorage } from "../src/storage.js";
 
@@ -44,8 +44,18 @@ class FakeMail implements Publisher {
   async verify() { return { audienceName: "Test", memberCount: 2 }; }
   updated: Array<{ id: string; draft: Draft }> = [];
   async publishDraft(d: Draft): Promise<PublishedCampaign> { this.published.push(d); return { id: `camp_${this.published.length}`, editUrl: "https://mc.test/e", platform: this.platform }; }
-  async updateDraft(id: string, draft: Draft) { this.updated.push({ id, draft }); }
+  async updateDraft(id: string, draft: Draft) {
+    // Mailchimp's own answer for a campaign that is not there, which is where the curator got stuck.
+    if (this.deletedThere.has(id)) throw Object.assign(new Error("Mailchimp update campaign failed (HTTP 404): Resource Not Found"), { status: 404 });
+    this.updated.push({ id, draft });
+  }
   async send(id: string) { this.sent.push(id); }
+  /** Campaigns the curator deleted in the platform's own interface, which this side cannot see. */
+  deletedThere = new Set<string>();
+  async campaignState(id: string): Promise<CampaignState> {
+    if (this.deletedThere.has(id)) return "missing";
+    return this.sent.includes(id) ? "sent" : "draft";
+  }
 }
 
 let dir: string;
@@ -299,7 +309,8 @@ describe("the newsletter tools, as Claude uses them", () => {
     const key3 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
     const refused = await c.call("approve_draft", { draft_key: key3 });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toContain("already sent (campaign camp_1)");
+    expect(refused.text).toContain("already gone out (campaign camp_1)");
+    expect(refused.text).toContain("subscribers have it");
     expect(mail.updated).toHaveLength(1);
     expect(mail.published).toHaveLength(1);
     await c.close();
@@ -325,6 +336,49 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect(rebuilt).toContain("Where: Volta, 1505 Barrington St");
     expect(rebuilt).toContain("Demo Night");
     await after.close();
+  });
+});
+
+/**
+ * What a live run found, reproduced from the curator's side. He approved, deleted the campaign in
+ * Mailchimp's own interface, and approved again: every attempt answered "Resource Not Found",
+ * because this side went on trying to update an id the platform no longer had. The month could not
+ * be approved again by any means available to him.
+ */
+describe("when the campaign is deleted in Mailchimp", () => {
+  it("makes a fresh one instead of leaving the month stuck on an id that is gone", async () => {
+    const mail = new FakeMail();
+    const c = await connect({ live: true, mail });
+    await c.call("prepare_month");
+    const key = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    expect((await c.call("approve_draft", { draft_key: key })).text).toContain("Campaign camp_1 created");
+
+    // He deletes it in Mailchimp. Nothing tells this side, which is the whole difficulty.
+    mail.deletedThere.add("camp_1");
+
+    const key2 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    const again = await c.call("approve_draft", { draft_key: key2 });
+    expect(again.isError).toBeFalsy();
+    expect(again.text).toContain("Campaign camp_2 created");
+    expect(mail.updated, "nothing may be sent to a campaign that is gone").toEqual([]);
+    await c.close();
+  });
+
+  it("tells him his work is safe when the platform simply will not take it", async () => {
+    const mail = new FakeMail();
+    mail.publishDraft = async () => { throw new Error("Mailchimp create campaign failed (HTTP 500): Internal error"); };
+    const c = await connect({ live: true, mail });
+    await c.call("prepare_month");
+    const key = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
+    const failed = await c.call("approve_draft", { draft_key: key });
+    expect(failed.isError).toBe(true);
+    // Not a bare platform error: what happened, that nothing went out, and what to do next.
+    expect(failed.text).toContain("nothing was created there and nothing was sent");
+    expect(failed.text).toContain("Your draft is safe");
+    expect(failed.text).toContain("Try approving again");
+    // The developer's sentence is still there, to be passed on rather than puzzled over.
+    expect(failed.text).toContain("HTTP 500");
+    await c.close();
   });
 });
 

@@ -43,7 +43,7 @@ export interface SurfaceState {
   /** The reminder as posted, so an added event can be merged into that same message. */
   reminder?: { input: ReminderInput; channel: string; ts?: string; sentAt?: string };
   /** Where the review is saved so a restart does not lose it. Absent means nothing is saved. */
-  session?: Pick<Storage, "saveSession" | "recordCampaign" | "markCampaignSent"> & Partial<Pick<Storage, "listCampaigns">>;
+  session?: Pick<Storage, "saveSession" | "recordCampaign" | "markCampaignSent"> & Partial<Pick<Storage, "listCampaigns" | "forgetCampaign">>;
   /**
    * The period this review belongs to, which it is saved under: the Monday of the week (weekly) or
    * the month, such as 2026-10 (monthly). Named `week` from when every newsletter was weekly.

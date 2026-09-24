@@ -11,7 +11,7 @@ import { MemoryAlerter } from "../src/alerts.js";
 import type { Draft } from "../src/draft/templates.js";
 import { rankItems } from "../src/pipeline/rank.js";
 import { MailchimpPublisher } from "../src/publish/mailchimp.js";
-import type { PublishedCampaign, Publisher } from "../src/publish/types.js";
+import type { CampaignState, PublishedCampaign, Publisher } from "../src/publish/types.js";
 import { approve, buildDraft, editItem, send, setSelection, startReview, type ReviewState } from "../src/review/review.js";
 import { SqliteStorage } from "../src/storage.js";
 import { loadCampaigns, loadReview, restoreSession } from "../src/surface/session.js";
@@ -170,5 +170,118 @@ describe("Mailchimp", () => {
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["PATCH /3.0/campaigns/camp_1", "PUT /3.0/campaigns/camp_1/content"]);
     expect(calls[0]!.body).toMatchObject({ settings: { subject_line: "Volta this month: Fall Mixer", from_name: "Volta", reply_to: "a@b.test" } });
     expect(calls[1]!.body).toEqual({ html: "<p>new</p>" });
+  });
+});
+
+/**
+ * The record of what the platform holds can be wrong in both directions, and both were met in one
+ * live run: a campaign deleted in Mailchimp, which left the month permanently unapprovable, and a
+ * campaign sent from Mailchimp's own editor while this side still believed it was a draft. So the
+ * decision to update, to refuse or to create is taken from what the platform says now.
+ */
+describe("when the platform and the record disagree", () => {
+  /** A publisher that answers about its campaigns, the way Mailchimp's GET /campaigns/{id} does. */
+  class Knowing extends FakeMail {
+    state: CampaignState = "draft";
+    asked: string[] = [];
+    stateThrows = false;
+    goneOnUpdate = false;
+    override async updateDraft(id: string, draft: Draft) {
+      if (this.goneOnUpdate) throw Object.assign(new Error("Mailchimp update campaign failed (HTTP 404): Resource Not Found"), { status: 404 });
+      await super.updateDraft(id, draft);
+    }
+    async campaignState(id: string): Promise<CampaignState> {
+      this.asked.push(id);
+      if (this.stateThrows) throw new Error("Mailchimp is unreachable");
+      return this.state;
+    }
+  }
+
+  /** Approve, let something change on the platform, then come back to it as a fresh session would. */
+  const approveTwice = async (mail: Knowing, between: (mail: Knowing) => void) => {
+    const before = review(mail);
+    const first = await approve(before, built(before).key);
+    between(mail);
+    const st = review(mail);
+    return { first, second: await approve(st, built(st).key), st };
+  };
+
+  it("creates a fresh campaign when the earlier one was deleted, instead of failing for good", async () => {
+    const mail = new Knowing();
+    const { first, second } = await approveTwice(mail, (m) => { m.state = "missing"; });
+    expect(first).toMatchObject({ status: "created", campaign: { id: "camp_1" } });
+    // The whole point: the month is approvable again, under a new campaign.
+    expect(second).toMatchObject({ status: "created", campaign: { id: "camp_2" } });
+    expect(mail.updates, "nothing should be sent to a campaign that is gone").toEqual([]);
+    // And the dead record is gone, so it cannot be picked again after a restart.
+    expect(storage.listCampaigns().map((c) => c.id)).toEqual(["camp_2"]);
+  });
+
+  it("refuses when the platform says it has gone out, even though the record said otherwise", async () => {
+    const mail = new Knowing();
+    const { first, second } = await approveTwice(mail, (m) => { m.state = "sent"; });
+    expect(first.status).toBe("created");
+    expect(second).toMatchObject({ status: "period-sent", campaignId: "camp_1" });
+    expect(mail.updates, "a newsletter subscribers have must never be rewritten").toEqual([]);
+    // Written down, so the refusal holds next time even if the platform cannot be reached then.
+    expect(storage.listCampaigns()[0]!.sent_at).not.toBeNull();
+  });
+
+  it("updates in place, as before, when the platform still holds a draft", async () => {
+    const mail = new Knowing();
+    const { first, second } = await approveTwice(mail, () => {});
+    expect(first.status).toBe("created");
+    expect(second).toMatchObject({ status: "updated", campaign: { id: "camp_1" } });
+    expect(mail.asked).toEqual(["camp_1"]);
+    expect(mail.created).toHaveLength(1);
+  });
+
+  it("never turns a passing fault into a second campaign for the month", async () => {
+    const mail = new Knowing();
+    const { second } = await approveTwice(mail, (m) => { m.failUpdate = true; });
+    expect(second.status).toBe("failed");
+    expect(mail.created, "one bad minute must not leave two campaigns behind").toHaveLength(1);
+    expect(storage.listCampaigns().map((c) => c.id)).toEqual(["camp_1"]);
+  });
+
+  it("falls back to what it recorded when the platform cannot be asked", async () => {
+    const mail = new Knowing();
+    const { second } = await approveTwice(mail, (m) => { m.stateThrows = true; });
+    // Unreachable is not the same as gone: it behaves as it always did rather than guessing.
+    expect(second).toMatchObject({ status: "updated", campaign: { id: "camp_1" } });
+    expect(mail.created).toHaveLength(1);
+  });
+
+  it("still recovers when the campaign is deleted between the question and the answer", async () => {
+    const mail = new Knowing();
+    const { second } = await approveTwice(mail, (m) => { m.goneOnUpdate = true; });
+    expect(second).toMatchObject({ status: "created", campaign: { id: "camp_2" } });
+    expect(storage.listCampaigns().map((c) => c.id)).toEqual(["camp_2"]);
+  });
+});
+
+/**
+ * Found while checking a live database: October had been sent to subscribers and its campaign then
+ * deleted in Mailchimp. Asking the platform first answers "missing" for exactly that case, so a
+ * month that had already gone out would have been published to the audience a second time.
+ * Deleting a campaign does not un-send it.
+ */
+describe("a campaign that was sent and then deleted in the platform", () => {
+  it("is still refused, however little the platform remembers of it", async () => {
+    const mail = new FakeMail();
+    let asked = 0;
+    const gone = Object.assign(mail, {
+      campaignState: async (): Promise<CampaignState> => { asked++; return "missing"; },
+    });
+    const first = review(gone);
+    const created = await approve(first, built(first).key);
+    expect(created).toMatchObject({ status: "created", campaign: { id: "camp_1" } });
+    expect(await send(first, "camp_1")).toMatchObject({ status: "sent" });
+
+    const st = review(gone);
+    const again = await approve(st, built(st).key);
+    expect(again).toMatchObject({ status: "period-sent", campaignId: "camp_1" });
+    expect(asked, "a send on record is final; there is nothing to ask about").toBe(0);
+    expect(mail.created, "the month must never go to the audience twice").toHaveLength(1);
   });
 });

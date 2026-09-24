@@ -77,6 +77,31 @@ describe("MailchimpPublisher", () => {
     expect(() => mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1" })).toThrow(/MAILCHIMP_REPLY_TO/);
     expect(mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1", MAILCHIMP_REPLY_TO: "a@b.c" })?.platform).toBe("Mailchimp");
   });
+
+  /**
+   * What Mailchimp says the campaign is now. Asked before approving, because the record on this
+   * side has been wrong in both directions: a campaign deleted there blocked the month for good,
+   * and one sent from Mailchimp's own editor was still recorded here as a draft.
+   */
+  it("reads a campaign's real state, and calls anything not plainly editable sent", async () => {
+    const states: Array<[string, string]> = [["save", "draft"], ["paused", "draft"], ["schedule", "sent"], ["sending", "sent"], ["sent", "sent"]];
+    for (const [status, expected] of states) {
+      const mc = fakeMailchimp({ "GET /3.0/campaigns/c1": { status: 200, body: { status } } });
+      const p = new MailchimpPublisher({ apiKey: "k-us21", listId: "L1", fromName: "V", replyTo: "x@y.test", fetch: mc.fetch });
+      expect(await p.campaignState("c1"), status).toBe(expected);
+    }
+    // A status this code has not met errs towards refusing rather than rewriting what went out.
+    const odd = fakeMailchimp({ "GET /3.0/campaigns/c1": { status: 200, body: { status: "something-new" } } });
+    expect(await new MailchimpPublisher({ apiKey: "k-us21", listId: "L1", fromName: "V", replyTo: "x@y.test", fetch: odd.fetch }).campaignState("c1")).toBe("sent");
+  });
+
+  it("calls a deleted campaign missing, and still throws on anything else", async () => {
+    const gone = fakeMailchimp({ "GET /3.0/campaigns/c1": { status: 404, body: { title: "Resource Not Found" } } });
+    expect(await new MailchimpPublisher({ apiKey: "k-us21", listId: "L1", fromName: "V", replyTo: "x@y.test", fetch: gone.fetch }).campaignState("c1")).toBe("missing");
+    // Not found is a fact; a server fault is not, and must not be read as one.
+    const broken = fakeMailchimp({ "GET /3.0/campaigns/c1": { status: 500, body: { title: "Internal error" } } });
+    await expect(new MailchimpPublisher({ apiKey: "k-us21", listId: "L1", fromName: "V", replyTo: "x@y.test", fetch: broken.fetch }).campaignState("c1")).rejects.toThrow(MailchimpError);
+  });
 });
 
 class FakeClient implements SlackClient {

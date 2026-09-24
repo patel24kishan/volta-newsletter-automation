@@ -9,7 +9,7 @@
  * Recipient addresses never pass through here (constraint 9).
  */
 import type { Draft } from "../draft/templates.js";
-import type { PublishedCampaign, Publisher } from "./types.js";
+import type { CampaignState, PublishedCampaign, Publisher } from "./types.js";
 
 export interface MailchimpConfig {
   apiKey: string;
@@ -69,6 +69,23 @@ export class MailchimpPublisher implements Publisher {
       settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.cfg.fromName, reply_to: this.cfg.replyTo },
     }, "update campaign");
     await this.call("PUT", `/campaigns/${campaignId}/content`, { html: draft.html }, "set campaign content");
+  }
+
+  /**
+   * Mailchimp's own view of the campaign. "save" and "paused" are still editable; "schedule",
+   * "sending" and "sent" are not, because the campaign is already committed to the audience and
+   * rewriting it would change what subscribers receive. Anything unrecognised is treated the same
+   * way, so a status this code has not met errs towards refusing rather than overwriting.
+   */
+  async campaignState(campaignId: string): Promise<CampaignState> {
+    let c: { status?: string };
+    try {
+      c = (await this.call("GET", `/campaigns/${campaignId}?fields=status`, undefined, "read campaign")) as { status?: string };
+    } catch (e) {
+      if (e instanceof MailchimpError && e.status === 404) return "missing";
+      throw e;
+    }
+    return c.status === "save" || c.status === "paused" ? "draft" : "sent";
   }
 
   async send(campaignId: string): Promise<void> {

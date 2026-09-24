@@ -19,6 +19,21 @@ describe("SqliteStorage", () => {
     expect(s.deleteManualEvent("me_never")).toBe(false);
   });
 
+  /**
+   * Only ever called once the platform has said the campaign is not there. Before this existed, a
+   * campaign deleted in Mailchimp stayed on record, approve went on trying to update an id that was
+   * gone, and the month could never be approved again.
+   */
+  it("forgets a campaign the platform no longer has, leaving the others alone", () => {
+    s.recordCampaign("camp_gone", "key1", "2026-09", "https://mc.test/1");
+    s.recordCampaign("camp_kept", "key2", "2026-10", "https://mc.test/2");
+    expect(s.forgetCampaign("camp_gone")).toBe(true);
+    expect(s.listCampaigns().map((c) => c.id)).toEqual(["camp_kept"]);
+    // Forgetting it twice, or one that was never recorded, is not an error.
+    expect(s.forgetCampaign("camp_gone")).toBe(false);
+    expect(s.forgetCampaign("never")).toBe(false);
+  });
+
   it("clears every change made to one item, and leaves other items' alone", () => {
     s.setCuratorEdit("2026-09", "manual-events:a", "title", "His title", "2026-09-24T12:00:00.000Z");
     s.setCuratorEdit("2026-09", "manual-events:a", "summary", "His words", "2026-09-24T12:00:00.000Z");
@@ -188,4 +203,5 @@ describe("sources the curator added", () => {
       s.close();
     }
   });
+
 });
