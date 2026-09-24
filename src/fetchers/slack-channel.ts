@@ -200,7 +200,9 @@ export function parseFounderUpdate(text: string): FounderUpdate | undefined {
   const angleAt = bullets.findIndex((b) => /^\*?Newsletter angle:\*?/i.test(b));
   const angleBullet = angleAt >= 0 ? bullets[angleAt] : undefined;
   const factual = (angleAt >= 0 ? bullets.slice(0, angleAt) : bullets).map(plain);
-  const trailing = (angleAt >= 0 ? bullets.slice(angleAt) : []).map(plain);
+  // From after the angle bullet: the angle itself becomes the item's summary, and repeating it in
+  // the notes made Bader read every piece of advice twice.
+  const trailing = (angleAt >= 0 ? bullets.slice(angleAt + 1) : []).map(plain);
 
   const insights: string[] = [];
   const pulled: string[] = [];

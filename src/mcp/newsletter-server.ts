@@ -13,11 +13,13 @@
  *   - Creating or sending an email needs ALLOW_LIVE=1 (CLAUDE.md section 4), and sending also needs
  *     `confirm: true`. In dry-run those tools say what they would have done and do nothing.
  */
+import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { describeSources, effectiveSources, toSourceConfig } from "../sources/curator-sources.js";
 import { ADDABLE_KINDS, configKeeps, credentialNote, filterTerms, filterWords, KIND_LABEL, readsWhat, sourceFromFields, sourceLine } from "./source-tools.js";
 import { droppedCount, explainSourceNote, formatSourceNote, parseSourceNote, sourceLink, worthSaying, type SourceNote } from "../sources/source-notes.js";
+import { keepRelevant } from "../sources/relevance.js";
 import type { Alerter } from "../alerts.js";
 import { partsInZone } from "../clock.js";
 import type { Clock } from "../clock.js";
@@ -218,7 +220,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   /** A fetcher's warning as something Bader can read. */
   function plainWarning(w: string): string {
-    if (/no JSON-LD|fell back/i.test(w)) return "it could only give the post titles, not what the posts say. The entries will look bare, so untick them unless you know what they are about.";
+    if (/no JSON-LD|fell back|came with no text/i.test(w)) return "it gave only links, not what the posts say. Those items are marked for review rather than ticked: check what they are about before you use them.";
     if (/markup may have changed/i.test(w)) return "nothing could be read from the page this time. Tell the maintainer if it keeps happening.";
     if (/link\(s\) could not be fetched/i.test(w)) return "some items have no link back to their Slack message.";
     if (/more messages in the window than could be read/i.test(w)) return "it had more messages than could be read in one go, so older ones this month may be missing.";
@@ -335,12 +337,12 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const section = (title: string, list: RankedItem[]) => {
       out.push("", `## ${title} (${list.length})`);
       if (!list.length) out.push("None.");
-      for (const c of list) out.push(describeItem(c.item, ticked.has(c.item.id), tz));
+      for (const c of list) out.push(describeItem(c.item, ticked.has(c.item.id), tz, d.clock.now()));
     };
     if (!group || group === "all" || group === "upcoming") section("Upcoming events", g.upcomingEvents);
-    if (!group || group === "all" || group === "past") section("Past events (last month)", g.pastEvents);
+    if (!group || group === "all" || group === "past") section(periodWord === "month" ? "Last month's events" : "Past events", g.pastEvents);
     if (!group || group === "all" || group === "other") section("News and updates", g.other);
-    return { ...text(out.join("\n")), structuredContent: panelState(st, periodWord, tz, isLive(d.env)) };
+    return { ...text(out.join("\n")), structuredContent: panelState(st, periodWord, tz, isLive(d.env), group) };
   });
 
   server.registerTool("set_selection", {
@@ -402,7 +404,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     if (!clear && value === undefined) return text("Give the new text, or clear: true to go back to the source.", true);
     const r = editItem(st, item_id, field as EditField, clear ? null : value!);
     if ("error" in r) return text(`Not changed: ${r.error}`, true);
-    return text(`${clear ? "Back to the source's" : "Changed the"} ${EDIT_FIELD_LABEL[field as EditField]}:\n${describeItem(r.item, currentSelection(st).includes(item_id), tz)}\nRebuild with build_draft to see it in the newsletter.`);
+    return text(`${clear ? "Back to the source's" : "Changed the"} ${EDIT_FIELD_LABEL[field as EditField]}:\n${describeItem(r.item, currentSelection(st).includes(item_id), tz, d.clock.now())}\nRebuild with build_draft to see it in the newsletter.`);
   });
 
   server.registerTool("build_draft", {
@@ -465,7 +467,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         ].join("\n"));
       }
     } catch (e) {
-      if (e instanceof DryRunRefusal) return text(`Dry run: the draft is saved in ${d.outDir}, but no campaign was created. Start the server with ALLOW_LIVE=1 to create one.`);
+      if (e instanceof DryRunRefusal) return text(`This is a practice run, so no email was created. The draft is saved at ${resolve(d.outDir)}. Ask the maintainer to switch the newsletter to live when you are ready to send for real.`);
       throw e;
     }
   });
@@ -484,7 +486,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       const why = { "no-platform": "no email platform is configured", "already-sent": "that campaign was already sent; it will not be sent twice", unknown: "that campaign was not approved here" }[r.status];
       return text(`Not sent: ${why}.`, true);
     } catch (e) {
-      if (e instanceof DryRunRefusal) return text("Dry run: nothing was sent. Start the server with ALLOW_LIVE=1 to send.");
+      if (e instanceof DryRunRefusal) return text("This is a practice run, so nothing was sent. Ask the maintainer to switch the newsletter to live when you are ready to send for real.");
       throw e;
     }
   });
@@ -505,12 +507,16 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         ...(d.fetchText ? { fetchText: d.fetchText } : {}),
       });
       if (r.error) return { ok: false, text: say({ id: source.id, status: "failed", error: r.error, warnings: r.warnings }) };
+      // The run filters a calendar, a LinkedIn page and a Slack channel after fetching them, so a
+      // raw count here would promise items the month will throw away.
+      const relevant = keepRelevant(source, d.config, r.items);
+      const warnings = relevant.dropped ? [...r.warnings, `${relevant.dropped} item(s) dropped as off-topic`] : r.warnings;
       // "Nothing in the window" and "everything was filtered out" are different facts to him.
-      if (r.items.length === 0) {
-        const note: SourceNote = { id: source.id, status: "empty", warnings: r.warnings };
-        return { ok: true, text: say(note), allDropped: droppedCount(r.warnings) > 0 };
+      if (relevant.items.length === 0) {
+        const note: SourceNote = { id: source.id, status: "empty", warnings };
+        return { ok: true, text: say(note), allDropped: droppedCount(warnings) > 0 };
       }
-      return { ok: true, text: `Read it: ${r.items.length} item(s) in this ${periodWord}'s window, for example "${r.items[0]!.title}".` };
+      return { ok: true, text: `Read it: ${relevant.items.length} item(s) it would keep this ${periodWord}, for example "${relevant.items[0]!.title}".` };
     } catch (e) {
       return { ok: false, text: say({ id: source.id, status: "failed", error: (e as Error).message }) };
     }
@@ -529,15 +535,16 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const lineFor = (s: SourceConfig) => sourceLine({
       source: s, config: d.config,
       ...(mine.get(s.id) ? { mine: mine.get(s.id)! } : {}),
-      ...(notes.get(s.id) ? { lastRun: notes.get(s.id)! } : {}),
+      ...(notes.get(s.id) || mine.get(s.id)?.last_note ? { lastRun: notes.get(s.id) || mine.get(s.id)!.last_note } : {}),
       ...(links[s.id] ? { link: links[s.id]! } : {}),
+      timeZone: tz,
     });
     const lines = all.sources.map(lineFor);
     // One he turned off is still his, so it is listed rather than quietly disappearing.
     for (const r of mine.values()) {
       if (!all.sources.some((s) => s.id === r.id) && !all.broken.some((b) => b.id === r.id)) {
         const off = sourceLink({ kind: r.kind, url: r.url, channel_id: r.channel_id, fallback_link: r.fallback_link } as unknown as SourceConfig);
-        lines.push(sourceLine({ source: { id: r.id, kind: r.kind, enabled: r.enabled } as unknown as SourceConfig, mine: r, config: d.config, ...(off ? { link: off } : {}) }));
+        lines.push(sourceLine({ source: { id: r.id, kind: r.kind, enabled: r.enabled } as unknown as SourceConfig, mine: r, config: d.config, timeZone: tz, ...(off ? { link: off } : {}) }));
       }
     }
     return text([
@@ -571,7 +578,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     }, taken);
     if ("errors" in made) return text(`Not added:\n${made.errors.map((e) => `- ${e}`).join("\n")}`, true);
 
-    const asSource = toSourceConfig({ ...made.row, added_at: d.clock.now().toISOString() });
+    const asSource = toSourceConfig({ ...made.row, last_note: "", added_at: d.clock.now().toISOString() });
     if ("errors" in asSource) return text(`Not added:\n${asSource.errors.map((e) => `- ${e}`).join("\n")}`, true);
 
     // A Slack channel with no token is kept but left off, so it can never look as if it were working.
@@ -588,7 +595,11 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const checked = f.check !== false && !blocked
       ? await checkSource(asSource.source, { name: row.label || row.id, kind: row.kind, keeps, keepsWords: filterTerms(row, d.config, row.kind), ...(link ? { link } : {}) })
       : undefined;
-    if (checked) lines.push(checked.text);
+    if (checked) {
+      lines.push(checked.text);
+      // Kept, so the list says how it did instead of showing a broken source as plain "on".
+      d.storage.setCuratorSourceNote(row.id, checked.ok ? "" : checked.text.replace(/^[^:]*(could not be read|was not read)/, "$1"));
+    }
     if (blocked) {
       lines.push("I have added it but left it switched off, so nothing looks broken while it waits. Once that is done, say: turn it back on.");
     } else if (checked?.allDropped) {
@@ -665,14 +676,14 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 }
 
 /** One candidate as a line Claude can read back: id, tick, title, when and where, and what was edited. */
-export function describeItem(it: Item, ticked: boolean, timeZone: string): string {
+export function describeItem(it: Item, ticked: boolean, timeZone: string, now?: Date): string {
   const p = partsInZone(new Date(it.date), timeZone);
   const date = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
   const time = `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
   // A held item leads with the same label the Slack list used, so it is seen before it is ticked.
   const bits = [
     `${ticked ? "[x]" : "[ ]"} ${it.requires_review ? `${REVIEW_LABEL} · ` : ""}${it.title}`,
-    it.type === "event" ? `${isPastEvent(it) ? "held" : "on"} ${date} ${time}${it.location ? ` at ${it.location}` : ""}` : `${it.type} from ${it.source}, ${date}`,
+    it.type === "event" ? `${isPastEvent(it, now) ? "held" : "on"} ${date} ${time}${it.location ? ` at ${it.location}` : ""}` : `${it.type} from ${it.source}, ${date}`,
   ];
   if (it.edited_fields?.length) bits.push(`edited by Bader: ${it.edited_fields.map((f) => EDIT_FIELD_LABEL[f as EditField] ?? f).join(", ")}`);
   if (it.image) bits.push("has an image");
@@ -754,14 +765,14 @@ export type PanelState = {
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS: Record<string, string> = { sunday: "Sun", monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat" };
 
-export function panelItem(it: Item, ticked: boolean, timeZone: string): PanelItem {
+export function panelItem(it: Item, ticked: boolean, timeZone: string, now?: Date): PanelItem {
   const p = partsInZone(new Date(it.date), timeZone);
   const pad = (n: number) => String(n).padStart(2, "0");
   const dateLocal = `${p.year}-${pad(p.month)}-${pad(p.day)}`;
   const h12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
   const isEvent = it.type === "event";
   const when = isEvent
-    ? `${isPastEvent(it) ? "held " : ""}${DAYS[p.weekday] ?? ""} ${MONTHS[p.month - 1]!.slice(0, 3)} ${p.day}, ${h12}:${pad(p.minute)} ${p.hour < 12 ? "am" : "pm"}`
+    ? `${isPastEvent(it, now) ? "held " : ""}${DAYS[p.weekday] ?? ""} ${MONTHS[p.month - 1]!.slice(0, 3)} ${p.day}, ${h12}:${pad(p.minute)} ${p.hour < 12 ? "am" : "pm"}`
     : dateLocal;
   const hasPoints = Boolean(it.insights?.length);
   const prints = hasPoints ? it.insights! : it.summary ? [it.summary] : [];
@@ -774,19 +785,23 @@ export function panelItem(it: Item, ticked: boolean, timeZone: string): PanelIte
 }
 
 /** Everything the review panel draws: the period, the mode and the three groups. */
-export function panelState(st: ReviewState, periodWord: string, timeZone: string, live: boolean): PanelState {
+export function panelState(st: ReviewState, periodWord: string, timeZone: string, live: boolean, group?: string): PanelState {
+  const now = st.now?.();
   const g = candidateGroups(st);
   const ticked = new Set(currentSelection(st));
-  const items = (list: RankedItem[]) => list.map((c) => panelItem(c.item, ticked.has(c.item.id), timeZone));
+  const items = (list: RankedItem[]) => list.map((c) => panelItem(c.item, ticked.has(c.item.id), timeZone, now));
   const key = st.week ?? "";
   const monthly = /^\d{4}-\d{2}$/.test(key);
   const periodLabel = monthly ? `${MONTHS[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}` : `Week of ${key}`;
+  const groups: PanelState["groups"] = [
+    { key: "upcoming", title: "Upcoming events", items: items(g.upcomingEvents) },
+    { key: "past", title: periodWord === "month" ? "Last month's events" : "Past events", items: items(g.pastEvents) },
+    { key: "other", title: "News and updates", items: items(g.other) },
+  ];
   return {
     periodLabel, dryRun: !live, ticked: ticked.size, total: st.candidates.length,
-    groups: [
-      { key: "upcoming", title: "Upcoming events", items: items(g.upcomingEvents) },
-      { key: "past", title: periodWord === "month" ? "Last month's events" : "Past events", items: items(g.pastEvents) },
-      { key: "other", title: "News and updates", items: items(g.other) },
-    ],
+    // Asking for one group must narrow both what is read out and what the panel shows, or "just
+    // the upcoming events" answers with all forty-four of them.
+    groups: group && group !== "all" ? groups.filter((x) => x.key === group) : groups,
   };
 }

@@ -50,3 +50,19 @@ export function keepRelevant(
   const kept = items.filter((it) => mentionsAny(haystackOf(it), terms));
   return { items: kept, dropped: items.length - kept.length };
 }
+
+/**
+ * Whether a news item is about the right place, for a source filtered by the newsletter's own
+ * watchlist. "Volta" is also a river in Ghana, a region of Ghana and a unit of electricity, so a
+ * watchlist word on its own is not enough; the config's `local_terms` say what else must appear.
+ * A source the curator gave his own keywords is exempt: he chose those words deliberately.
+ */
+export function isLocalEnough(
+  source: Pick<SourceConfig, "keywords">,
+  config: Pick<Config, "local_terms">,
+  haystack: string,
+): boolean {
+  if (hasOwnKeywords(source)) return true;
+  const terms = config.local_terms ?? [];
+  return terms.length === 0 || mentionsAny(haystack, terms);
+}

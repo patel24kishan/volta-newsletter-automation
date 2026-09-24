@@ -87,7 +87,6 @@ describe("parseFounderUpdate", () => {
     ]);
     // The angle, the bullet after it, and the caution lifted out of bullet two.
     expect(u.notes).toEqual([
-      "Newsletter angle: \"one forecast for an area where the wind differs end to end\" is the line that makes the problem legible.",
       "Ask Iris for the comparison chart.",
       "Comparison data promised — chase it, and don't publish the claim without it.",
     ]);
@@ -179,7 +178,7 @@ describe("founder updates through the channel fetcher", () => {
       "Open beta of a hyperlocal marine forecast API — 6 km resolution versus Environment Canada's much larger marine zones.",
       "Claims improvement on wind direction only; explicitly says wave height is no better.",
     ]);
-    expect(item.editor_notes).toHaveLength(3);
+    expect(item.editor_notes).toHaveLength(2);
     expect(item.hold_note).toBeUndefined();
     // No submitter lookup is needed: the header already names who the update is about.
     expect(calls).toEqual(["conversations.history", "chat.getPermalink"]);

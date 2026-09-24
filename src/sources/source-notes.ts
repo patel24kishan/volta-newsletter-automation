@@ -92,8 +92,11 @@ export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; k
   if (/HTTP 4\d\d/.test(err)) {
     return `The address was refused, so it may have moved or been taken down. Check the link, ${say}`;
   }
-  if (/HTTP 5\d\d|fetch failed|timed out|ENOTFOUND|ECONNREFUSED/i.test(err)) {
-    return `The site did not answer. That is usually temporary: ${say}`;
+  if (/ENOTFOUND|getaddrinfo|ERR_NAME_NOT_RESOLVED/i.test(err)) {
+    return `Nothing answers at that address, so it is probably a typo. Check it against the site, ${say}`;
+  }
+  if (/HTTP 5\d\d|fetch failed|timed out|ECONNREFUSED/i.test(err)) {
+    return `The site did not answer. That is usually temporary, but check the address for a typo if it keeps failing. ${say[0]!.toUpperCase()}${say.slice(1)}`;
   }
   if (/the reader for this source broke/.test(err)) {
     return "This is a fault in the newsletter itself, not something you can fix: tell the maintainer.";
@@ -143,10 +146,13 @@ export function explainSourceNote(
   o: { name?: string; kind?: string; keeps?: string; keepsWords?: string; link?: string; env?: NodeJS.ProcessEnv; periodWord?: string } = {},
 ): string {
   const name = o.name || note.id;
-  const what = note.status === "empty" ? `${name} found nothing this time.`
-    : note.status === "skipped" ? `${name} was not read${note.error ? `: ${note.error}` : ""}.`
-    : `${name} could not be read${note.error ? `: ${note.error}` : ""}.`;
   const remedy = remedyFor(note, o);
+  // The raw error is a developer's sentence ("GET ... failed: fetch failed", "channel_not_found
+  // (check channel_id in config)"). It is only shown when nothing better can be said.
+  const detail = remedy || !note.error ? "" : `: ${note.error}`;
+  const what = note.status === "empty" ? `${name} found nothing this time.`
+    : note.status === "skipped" ? `${name} was not read${detail}.`
+    : `${name} could not be read${detail}.`;
   return [what, remedy, o.link ? `(${o.link})` : undefined].filter(Boolean).join(" ");
 }
 
@@ -158,5 +164,5 @@ export function explainSourceNote(
 export function worthSaying(warning: string): boolean {
   // Deliberately not "dropped as off-topic": a source doing its filtering job is not a problem, and
   // when everything it published was dropped the explanation already says so, in numbers.
-  return /fell back|markup may have changed|no JSON-LD|link\(s\) could not be fetched|more messages in the window than could be read|may be missing|were skipped|unknown TZID|broke/i.test(warning);
+  return /fell back|markup may have changed|no JSON-LD|came with no text|link\(s\) could not be fetched|more messages in the window than could be read|may be missing|were skipped|unknown TZID|broke/i.test(warning);
 }

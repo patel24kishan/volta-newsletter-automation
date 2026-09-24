@@ -88,7 +88,10 @@ export class LinkedInCompanyFetcher implements Fetcher {
         link: p.url,
         source_ref: `activity:${p.activityId}`,
         confidence: p.via === "jsonld" ? "high" : "medium",
-        requires_review: false,
+        // Without the post's own words the title is a fragment of its address ("What happens when
+        // you bring a room full of"). It is held, so Bader decides rather than it going out ticked.
+        requires_review: !text,
+        ...(text ? {} : { hold_note: "LinkedIn gave only the link, not the post's words: check what it says before ticking it" }),
         raw_excerpt: text || title,
       });
     }

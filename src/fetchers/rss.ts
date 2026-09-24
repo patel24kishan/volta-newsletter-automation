@@ -13,7 +13,7 @@ import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { collapseWhitespace, decodeEntities, firstSentences, mentionsAny, stripHtml } from "../text.js";
 import { describeWindow, windowsOf } from "../schedule/period.js";
-import { hasOwnKeywords, keywordsFor } from "../sources/relevance.js";
+import { hasOwnKeywords, isLocalEnough, keywordsFor } from "../sources/relevance.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
 /** What an RSS <item> and an Atom <entry> both come down to, already flattened to strings. */
@@ -72,6 +72,12 @@ export class RssFetcher implements Fetcher {
       if (!mentionsAny(haystack, terms)) {
         offTopic++;
         warnings.push(`off-topic (no ${hasOwnKeywords(source) ? "keyword for this source" : "watchlist term"}): "${title}"`);
+        continue;
+      }
+      // A watchlist word alone is not enough for news: Volta is a river and a region in Ghana too.
+      if (!isLocalEnough(source, ctx.config, haystack)) {
+        offTopic++;
+        warnings.push(`off-topic (mentions no local place): "${title}"`);
         continue;
       }
 

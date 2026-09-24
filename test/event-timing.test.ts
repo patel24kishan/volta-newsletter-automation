@@ -87,7 +87,7 @@ describe("marking events when fetched", () => {
     const legacy = { ...mixer };
     delete legacy.event_timing;
     expect(isPastEvent(legacy)).toBe(false);
-    expect(isPastEvent({ type: "news", event_timing: "past" })).toBe(false);
+    expect(isPastEvent({ type: "news", event_timing: "past", date: "2026-09-01T00:00:00.000Z" })).toBe(false);
   });
 });
 

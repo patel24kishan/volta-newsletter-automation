@@ -6,6 +6,7 @@
  * network. Nothing here accepts newsletter text: a source is an address, an id, search words and
  * filter words, and the name he gives it is only ever shown back to him in the source list.
  */
+import { partsInZone } from "../clock.js";
 import type { Config, SourceConfig, SourceKind } from "../config.js";
 import { curatorSourceId } from "../sources/curator-sources.js";
 import type { CuratorSource, NewCuratorSource } from "../storage.js";
@@ -159,13 +160,15 @@ export function sourceLine(o: {
   lastRun?: string;
   /** Where he goes to deal with it: the feed, the page, or the Slack channel itself. */
   link?: string;
+  /** His timezone, so a source added at 22:00 Halifax does not read as added tomorrow. */
+  timeZone?: string;
 }): string {
   const kind = o.source.kind as AddableKind;
   const name = o.mine?.label || o.source.id;
   const reads = o.mine ? readsWhat(o.mine) : describeConfigSource(o.source as SourceConfig);
   const bits = [
     `${o.source.enabled ? "on" : "off"}`,
-    o.mine ? `added by you on ${o.mine.added_at.slice(0, 10)}` : "set up by the maintainer",
+    o.mine ? `added by you on ${localDay(o.mine.added_at, o.timeZone)}` : "set up by the maintainer",
     o.mine ? `keeps ${filterWords(o.mine, o.config, o.source.kind)}` : `keeps ${configKeeps(o.source.kind, o.config)}`,
     o.lastRun ? `last run: ${o.lastRun}` : "",
   ].filter(Boolean);
@@ -194,4 +197,11 @@ export function isAddableKind(kind: string): kind is AddableKind {
 /** The kinds as a SourceKind, for the fetcher registry. */
 export function asSourceKind(kind: AddableKind): SourceKind {
   return kind;
+}
+
+/** A stored instant as the day it was where Bader is: slicing the UTC text is a day out all evening. */
+function localDay(iso: string, timeZone?: string): string {
+  if (!timeZone) return iso.slice(0, 10);
+  const p = partsInZone(new Date(iso), timeZone);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
 }

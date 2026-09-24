@@ -60,7 +60,7 @@ describe("what he gave, as a source to store", () => {
 describe("what he is told about a source", () => {
   const row = (o: Partial<CuratorSource> = {}): CuratorSource => ({
     id: "cur_entrevestor", kind: "rss", type: "news", url: "https://entrevestor.test/feed", terms: [], channel_id: "",
-    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", enabled: true, added_at: "2026-09-23T12:00:00.000Z", ...o,
+    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", last_note: "", enabled: true, added_at: "2026-09-23T12:00:00.000Z", ...o,
   });
 
   it("says what it reads, in its own terms", () => {

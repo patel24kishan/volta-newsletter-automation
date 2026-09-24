@@ -72,7 +72,7 @@ export function candidateGroups(st: Pick<ReviewState, "candidates"> & Partial<Re
   const edited = withEdits(st as ReviewState, st.candidates.map((c) => c.item));
   for (const [i, c0] of st.candidates.entries()) {
     const c = edited[i] === c0.item ? c0 : { ...c0, item: edited[i]! };
-    if (isPastEvent(c.item)) pastEvents.push(c);
+    if (isPastEvent(c.item, st.now?.())) pastEvents.push(c);
     else if (c.item.type === "event") upcomingEvents.push(c);
     else other.push(c);
   }

@@ -426,3 +426,39 @@ describe("no single source can stop the newsletter", () => {
     expect(md).toContain("No news to report this week.");
   });
 });
+
+describe("what reaches the newsletter, and what is held back", () => {
+  let outDir: string;
+  let storage: SqliteStorage;
+  beforeEach(() => { outDir = mkdtempSync(join(tmpdir(), "volta-run-hold-")); storage = new SqliteStorage(":memory:"); });
+  afterEach(() => { storage.close(); rmSync(outDir, { recursive: true, force: true }); });
+
+  const clock = () => resolveClock(["--now=2026-09-15T18:00:00Z"], {});
+
+  it("drops a story that says Volta but is about somewhere else", async () => {
+    const GHANA = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>Volta youth group backs call for Sedina's release</title><link>https://news.test/gh</link><guid>gh</guid><pubDate>Mon, 14 Sep 2026 10:00:00 GMT</pubDate><description>A petition in the Volta Region.</description></item>
+<item><title>Volta opens applications for its fall cohort</title><link>https://news.test/hfx</link><guid>hfx</guid><pubDate>Mon, 14 Sep 2026 10:00:00 GMT</pubDate><description>The Halifax hub opened applications.</description></item>
+</channel></rss>`;
+    const local = { ...config, local_terms: ["Halifax", "Nova Scotia"] };
+    const s = await runWeek({ config: local, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: async (u) => (u === "https://news.test/rss" ? GHANA : fetchText(u)) });
+    const titles = s.candidates.map((c) => c.item.title);
+    expect(titles).toContain("Volta opens applications for its fall cohort");
+    expect(titles.join(" ")).not.toContain("Sedina");
+    expect(s.sources.find((x) => x.id === "google-news")!.warnings.join("\n")).toMatch(/mentions no local place/);
+  });
+
+  it("holds back a post that came with no text, and says the source gave only links", async () => {
+    // LinkedIn without its JSON-LD: titles are fragments of the web address, useless on their own.
+    const BARE = `<html><body><a href="https://www.linkedin.com/posts/voltaeffect_what-happens-when-you-bring-a-room-full-of-activity-7505203691520000000-qA1x">x</a></body></html>`;
+    const s = await runWeek({ config, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: async (u) => (u === "https://li.test/company" ? BARE : fetchText(u)) });
+    const li = s.candidates.filter((c) => c.item.source === "volta-linkedin");
+    expect(li.length).toBeGreaterThan(0);
+    for (const c of li) {
+      expect(c.item.requires_review).toBe(true);
+      expect(c.item.hold_note).toContain("only the link");
+      expect(s.preselected_ids).not.toContain(c.item.id);
+    }
+    expect(s.sources.find((x) => x.id === "volta-linkedin")!.warnings.join("\n")).toMatch(/came with no text|fell back/);
+  });
+});

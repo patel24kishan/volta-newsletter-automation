@@ -53,7 +53,7 @@ describe("the whole sentence he reads", () => {
   it("is what happened, what to do, and where to go", () => {
     expect(explainSourceNote(note("member-updates", "failed", "Slack refused the request: not_in_channel"), {
       name: "Member updates", periodWord: "month", link: "https://slack.com/app_redirect?channel=C0C2H7WAUJX",
-    })).toBe("Member updates could not be read: Slack refused the request: not_in_channel. The bot is not in that channel. Open it, type /invite @Volta Newsletter, then say: refresh this month. (https://slack.com/app_redirect?channel=C0C2H7WAUJX)");
+    })).toBe("Member updates could not be read. The bot is not in that channel. Open it, type /invite @Volta Newsletter, then say: refresh this month. (https://slack.com/app_redirect?channel=C0C2H7WAUJX)");
   });
 
   it("uses the source's id when he never named it, and drops the link when there is none", () => {
@@ -142,5 +142,38 @@ describe("a feed that published plenty and had it all filtered out", () => {
   it("counts only a real drop line, so a genuinely quiet source still reads as quiet", () => {
     expect(droppedCount(["12 item(s) outside the window (2026-09-01 to 2026-10-01)"])).toBe(0);
     expect(droppedCount(["40 item(s) dropped as off-topic"])).toBe(40);
+  });
+});
+
+describe("nothing a developer wrote reaches Bader", () => {
+  it("drops the raw error whenever there is something better to say", () => {
+    for (const err of [
+      "GET https://x.test/feed failed: fetch failed",
+      "Slack refused the request: channel_not_found (check channel_id in config, and that the bot can see the channel)",
+      "no <rss><channel> or <feed><entry> element; not an RSS or Atom feed",
+      "SLACK_BOT_TOKEN is not set, so the channel cannot be read",
+    ]) {
+      const said = explainSourceNote({ id: "s", status: "failed", error: err }, { name: "A source", periodWord: "month" });
+      expect(said, err).not.toContain("GET ");
+      expect(said, err).not.toContain("channel_not_found");
+      expect(said, err).not.toContain("<rss>");
+      expect(said, err).not.toContain("config");
+    }
+  });
+
+  it("still shows the error when nothing better is known, rather than hiding the failure", () => {
+    const said = explainSourceNote({ id: "s", status: "failed", error: "something nobody has seen before" }, { name: "A source" });
+    expect(said).toBe("A source could not be read: something nobody has seen before.");
+  });
+
+  it("reads as one sentence, never two colons in a row", () => {
+    const said = explainSourceNote({ id: "s", status: "failed", error: "GET https://x.test failed: HTTP 503" }, { name: "A source", periodWord: "month" });
+    expect(said).not.toMatch(/: then say/);
+    expect(said).toContain("Then say: refresh this month.");
+  });
+
+  it("calls a dead address a typo rather than an outage", () => {
+    expect(remedyFor({ id: "s", status: "failed", error: "GET https://nope.test failed: fetch failed ENOTFOUND nope.test" }, { periodWord: "month" }))
+      .toMatch(/probably a typo/);
   });
 });

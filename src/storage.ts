@@ -59,6 +59,8 @@ export interface Storage {
   setCuratorSourceEnabled(id: string, enabled: boolean, nowIso: string): boolean;
   /** Forget a source. Items already fetched from it are left alone. False when there is no such source. */
   removeCuratorSource(id: string): boolean;
+  /** Remember how a source last did, so the list can show it rather than looking healthy. */
+  setCuratorSourceNote(id: string, note: string): boolean;
   close(): void;
 }
 
@@ -77,11 +79,13 @@ export interface CuratorSource {
   filtered: boolean;
   /** The curator's name for it, shown in the source list and never printed in the newsletter. */
   label: string;
+  /** How it last did, as one sentence for him ("could not be read: ..."). Empty until it is tried. */
+  last_note: string;
   enabled: boolean;
   added_at: string;
 }
 
-export type NewCuratorSource = Omit<CuratorSource, "added_at"> & { added_at?: string };
+export type NewCuratorSource = Omit<CuratorSource, "added_at" | "last_note"> & { added_at?: string; last_note?: string };
 
 export interface CuratorEdit {
   period: string;
@@ -191,6 +195,7 @@ export class SqliteStorage implements Storage {
         keywords TEXT NOT NULL DEFAULT '[]',
         filtered INTEGER NOT NULL DEFAULT 0,
         label TEXT NOT NULL DEFAULT '',
+        last_note TEXT NOT NULL DEFAULT '',
         enabled INTEGER NOT NULL,
         added_at TEXT NOT NULL
       );
@@ -214,6 +219,8 @@ export class SqliteStorage implements Storage {
     if (!campaigns.has("period")) this.db.exec("ALTER TABLE campaigns ADD COLUMN period TEXT");
     if (!campaigns.has("edit_url")) this.db.exec("ALTER TABLE campaigns ADD COLUMN edit_url TEXT");
     if (!manual.has("image")) this.db.exec("ALTER TABLE manual_events ADD COLUMN image TEXT NOT NULL DEFAULT ''");
+    const sources = new Set((this.db.prepare("PRAGMA table_info(curator_sources)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (sources.size && !sources.has("last_note")) this.db.exec("ALTER TABLE curator_sources ADD COLUMN last_note TEXT NOT NULL DEFAULT ''");
   }
 
   upsertItems(items: Item[]): number {
@@ -335,12 +342,12 @@ export class SqliteStorage implements Storage {
     if (this.db.prepare("SELECT 1 FROM curator_sources WHERE id = ?").get(row.id)) {
       throw new StorageError(`a source called ${row.id} already exists`);
     }
-    const saved: CuratorSource = { ...row, added_at: row.added_at ?? new Date().toISOString() };
+    const saved: CuratorSource = { ...row, last_note: row.last_note ?? "", added_at: row.added_at ?? new Date().toISOString() };
     this.db
-      .prepare(`INSERT INTO curator_sources (id, kind, type, url, terms, channel_id, fallback_link, keywords, filtered, label, enabled, added_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .prepare(`INSERT INTO curator_sources (id, kind, type, url, terms, channel_id, fallback_link, keywords, filtered, label, last_note, enabled, added_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(saved.id, saved.kind, saved.type, saved.url, JSON.stringify(saved.terms), saved.channel_id, saved.fallback_link,
-        JSON.stringify(saved.keywords), saved.filtered ? 1 : 0, saved.label, saved.enabled ? 1 : 0, saved.added_at);
+        JSON.stringify(saved.keywords), saved.filtered ? 1 : 0, saved.label, saved.last_note, saved.enabled ? 1 : 0, saved.added_at);
     return saved;
   }
 
@@ -349,13 +356,18 @@ export class SqliteStorage implements Storage {
     return rows.map((r) => ({
       id: String(r.id), kind: String(r.kind), type: String(r.type), url: String(r.url),
       terms: parseList(r.terms), channel_id: String(r.channel_id), fallback_link: String(r.fallback_link),
-      keywords: parseList(r.keywords), filtered: Number(r.filtered) === 1, label: String(r.label),
+      keywords: parseList(r.keywords), filtered: Number(r.filtered) === 1, label: String(r.label), last_note: String(r.last_note ?? ""),
       enabled: Number(r.enabled) === 1, added_at: String(r.added_at),
     }));
   }
 
   setCuratorSourceEnabled(id: string, enabled: boolean, _nowIso: string): boolean {
     const res = this.db.prepare("UPDATE curator_sources SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
+    return Number(res.changes) > 0;
+  }
+
+  setCuratorSourceNote(id: string, note: string): boolean {
+    const res = this.db.prepare("UPDATE curator_sources SET last_note = ? WHERE id = ?").run(note, id);
     return Number(res.changes) > 0;
   }
 

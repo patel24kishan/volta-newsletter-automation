@@ -67,5 +67,12 @@ export function firstSentences(text: string, n: number, maxChars: number): strin
 export function mentionsAny(text: string, terms: string[]): boolean {
   if (terms.length === 0) return true;
   const hay = text.toLowerCase();
-  return terms.some((t) => t.trim() !== "" && hay.includes(t.toLowerCase()));
+  // Whole words, not substrings: "Volta" used to match "voltage" and "Revolta", which is how a
+  // battery press release and a Ghanaian river authority reached a Halifax newsletter.
+  return terms.some((t) => {
+    const term = t.trim().toLowerCase();
+    if (!term) return false;
+    const quoted = term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(String.raw`(^|[^\p{L}\p{N}])${quoted}([^\p{L}\p{N}]|$)`, "u").test(hay);
+  });
 }

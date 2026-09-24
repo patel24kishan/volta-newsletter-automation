@@ -103,7 +103,7 @@ describe("SqliteStorage migration", () => {
 describe("sources the curator added", () => {
   const row = (o: Record<string, unknown> = {}) => ({
     id: "cur_entrevestor", kind: "rss", type: "news", url: "https://entrevestor.test/feed", terms: [], channel_id: "",
-    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", enabled: true, ...o,
+    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", last_note: "", enabled: true, ...o,
   });
 
   it("round-trips one, keeping its lists and its on-off state", () => {

@@ -71,9 +71,18 @@ export interface Item {
 
 export type EventTiming = "past" | "upcoming";
 
-/** An event already held when it was fetched: listed and printed apart from what is coming up. */
-export function isPastEvent(it: Pick<Item, "type" | "event_timing">): boolean {
-  return it.type === "event" && it.event_timing === "past";
+/**
+ * An event that has already happened: listed and printed apart from what is coming up.
+ *
+ * `event_timing` is decided when a source is read, which is right for a run but wrong for a review
+ * opened hours or days later: a breakfast held this morning would still be offered as something to
+ * promote. When the caller knows the time, the date decides; the stored flag is only the fallback
+ * for callers that have no clock (an item on its own, in a template).
+ */
+export function isPastEvent(it: Pick<Item, "type" | "event_timing" | "date">, now?: Date): boolean {
+  if (it.type !== "event") return false;
+  if (now && it.date) return new Date(it.date).getTime() <= now.getTime();
+  return it.event_timing === "past";
 }
 
 /** The optional fields stored together as one JSON column. */

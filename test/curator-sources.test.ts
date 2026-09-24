@@ -17,7 +17,7 @@ const config = {
 function row(o: Partial<NewCuratorSource> = {}): CuratorSource {
   return {
     id: "cur_entrevestor", kind: "rss", type: "news", url: "https://entrevestor.test/feed", terms: [], channel_id: "",
-    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", enabled: true, added_at: "2026-09-23T12:00:00.000Z", ...o,
+    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", last_note: "", enabled: true, added_at: "2026-09-23T12:00:00.000Z", ...o,
   };
 }
 

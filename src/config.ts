@@ -60,6 +60,13 @@ export interface Config {
    * Optional; 7 when absent.
    */
   catch_up_days?: number;
+  /**
+   * News only: an item must mention one of these as well as a watchlist word, so a story about the
+   * Volta Region of Ghana or the Volta River Authority does not read as Halifax news. Optional, and
+   * absent means the watchlist alone decides, as it used to. It never applies to a source the
+   * curator gave its own keywords: those are his choice.
+   */
+  local_terms?: string[];
   /** Days of content to look back (weekly cadence). */
   content_window_days: number;
   /** Days of events to look ahead (weekly cadence). */
@@ -169,6 +176,7 @@ export function validateConfig(value: unknown, where = "config"): Config {
   needPosInt("content_window_days");
   needPosInt("events_window_days");
   needStringArray("watchlist");
+  if (c.local_terms !== undefined) needStringArray("local_terms");
   needStringArray("holiday_overrides");
   needStringArray("alert_recipients");
 

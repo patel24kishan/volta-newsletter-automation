@@ -170,7 +170,7 @@ describe("the newsletter tools, as Claude uses them", () => {
 
     const approved = await c.call("approve_draft", { draft_key: key });
     expect(approved.text).toMatch(/^Approved and saved to /); // no platform configured here
-    expect((await c.call("send_campaign", { campaign_id: "camp_1", confirm: true })).text).toMatch(/Dry run: nothing was sent/);
+    expect((await c.call("send_campaign", { campaign_id: "camp_1", confirm: true })).text).toMatch(/practice run, so nothing was sent/);
 
     // stdout carries the protocol in the real server: the tools themselves never print.
     expect(out).not.toHaveBeenCalled();
@@ -183,7 +183,7 @@ describe("the newsletter tools, as Claude uses them", () => {
     const c = await connect({ mail });
     await c.call("prepare_month");
     const key = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
-    expect((await c.call("approve_draft", { draft_key: key })).text).toMatch(/Dry run: .*no campaign was created/);
+    expect((await c.call("approve_draft", { draft_key: key })).text).toMatch(/practice run, so no email was created/);
     expect(mail.published).toEqual([]);
     await c.close();
   });
@@ -516,5 +516,81 @@ describe("what Bader is told about sources, wherever he reads it", () => {
     expect(off.text).toContain("keeps everything it publishes");
     expect(off.text).not.toContain("watchlist");
     await c.close();
+  });
+});
+
+describe("what the curator is told, checked against what the month will really do", () => {
+  it("counts what a calendar would keep, not what it published, when he gave it keywords", async () => {
+    // QA: it said "Read it: 3 item(s), for example Labour Day" for a calendar filtered on "Volta".
+    const c = await connect();
+    const added = await c.call("add_source", { kind: "ics", url: "https://cal.test/ics", name: "Partner calendar", keywords: ["aquaculture"] });
+    expect(added.text).toContain("none of them mention aquaculture.");
+    expect(added.text).not.toMatch(/Read it: \d+ item/);
+    await c.close();
+  });
+
+  it("treats an event that has already happened as past, however long ago the month was prepared", async () => {
+    const c = await connect();
+    await c.call("prepare_month"); // prepared 1 October; Demo Night was 17 September
+    const list = await c.call("list_candidates");
+    const upcoming = list.text.slice(list.text.indexOf("## Upcoming events"), list.text.indexOf("## Last month's events"));
+    expect(upcoming).not.toContain("Demo Night");
+    expect(list.text).toContain("held 2026-09-17");
+    await c.close();
+  });
+
+  it("shows only the group he asked for, in the panel as well as the text", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+    const r = (await c.client.callTool({ name: "list_candidates", arguments: { group: "upcoming" } })) as { structuredContent?: { groups: Array<{ key: string }> } };
+    expect(r.structuredContent?.groups.map((g) => g.key)).toEqual(["upcoming"]);
+    await c.close();
+  });
+
+  it("never tells him to change a setting only the maintainer can reach", async () => {
+    const c = await connect({ mail: new FakeMail() });
+    await c.call("prepare_month");
+    await c.call("build_draft");
+    const approved = await c.call("approve_draft", { draft_key: (await c.call("newsletter_status")).text.match(/key ([0-9a-f-]+)/)![1]! });
+    expect(approved.text).toContain("This is a practice run");
+    expect(approved.text).not.toContain("ALLOW_LIVE");
+    const sent = await c.call("send_campaign", { campaign_id: "x", confirm: true });
+    expect(sent.text).not.toContain("ALLOW_LIVE");
+    await c.close();
+  });
+
+  it("dates a source by the day it was where Bader is, not in UTC", async () => {
+    // 1 October 11:30 UTC is still 1 October in Halifax; the bug showed at 22:00 local (01:00 UTC).
+    const c = await connect();
+    await c.call("add_source", { kind: "rss", url: "https://news.test/rss", name: "QA date", check: false });
+    expect((await c.call("list_sources")).text).toContain("added by you on 2026-10-01");
+    await c.close();
+  });
+});
+
+describe("a source that failed is not left looking healthy", () => {
+  it("remembers the failed check and shows it in the list", async () => {
+    const c = await connect();
+    const added = await c.call("add_source", { kind: "rss", url: "https://nothing.test/feed", name: "Dead feed" });
+    expect(added.text).toContain("could not be read");
+
+    const list = await c.call("list_sources");
+    expect(list.text).toMatch(/Dead feed[\s\S]*?last run: could not be read/);
+    await c.close();
+  });
+
+  it("forgets the failure once the source works", async () => {
+    const c = await connect();
+    await c.call("add_source", { kind: "rss", url: "https://nothing.test/feed", name: "Sometimes down", check: true });
+    BODIES["https://nothing.test/feed"] = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>Volta opens applications again</title><link>https://nothing.test/a</link><guid>a</guid><pubDate>Thu, 10 Sep 2026 09:00:00 GMT</pubDate><description>Volta opened applications.</description></item></channel></rss>`;
+    try {
+      await c.call("set_source", { source_id: "cur_sometimes-down", enabled: true });
+      await c.call("prepare_month", { force: true });
+      expect((await c.call("list_sources")).text).not.toMatch(/Sometimes down[\s\S]*?last run: could not be read/);
+      await c.close();
+    } finally {
+      delete BODIES["https://nothing.test/feed"];
+    }
   });
 });

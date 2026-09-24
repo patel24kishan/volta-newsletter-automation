@@ -111,7 +111,13 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
       alerter.alert("warning", s.id, "returned zero items in the window", "normal if quiet; verify the source manually if unexpected");
       continue;
     }
-    sources.push({ id: s.id, status: "ok", items: relevant.items.length, warnings });
+    // All of it unusable is not success: a source whose items carry no text at all is flagged so
+    // the month says so, rather than printing bare links.
+    const noText = relevant.items.every((it) => it.needs_summary && !it.insights?.length);
+    sources.push({
+      id: s.id, status: "ok", items: relevant.items.length,
+      warnings: noText ? [...warnings, `${relevant.items.length} item(s) came with no text, only links`] : warnings,
+    });
     fetched.push(...relevant.items);
   }
 

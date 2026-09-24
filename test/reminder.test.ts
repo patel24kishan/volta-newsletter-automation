@@ -38,7 +38,8 @@ describe("the first-workday greeting", () => {
     const t = greetingText(facts({ sourceNotes: ["news-volta: empty", "volta-linkedin: failed (LinkedIn served a login wall)"] }));
     expect(t).toContain("Needs your attention:\n- news-volta found nothing this time.");
     // A failure he can do nothing about says so, rather than leaving him wondering.
-    expect(t).toContain("- volta-linkedin could not be read: LinkedIn served a login wall. Nothing to do: LinkedIn showed a sign-in page instead of the public one. It usually works next time.");
+    // The source's own error is a developer's sentence; he gets the plain one instead.
+    expect(t).toContain("- volta-linkedin could not be read. Nothing to do: LinkedIn showed a sign-in page instead of the public one. It usually works next time.");
     expect(t).toContain("- MARKED FOR REVIEW · Bellwether Soil: Good material, can't run it yet. On hold: REVISIT w/c Sep 28 (embargo) (not ticked)");
   });
 

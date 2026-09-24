@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Config, SourceConfig } from "../src/config.js";
-import { hasOwnKeywords, keepRelevant, keywordsFor } from "../src/sources/relevance.js";
+import { mentionsAny } from "../src/text.js";
+import { hasOwnKeywords, isLocalEnough, keepRelevant, keywordsFor } from "../src/sources/relevance.js";
 import { sampleItem } from "./helpers.js";
 
 const config = { watchlist: ["Volta", "voltaeffect"] } as Pick<Config, "watchlist">;
@@ -49,5 +50,35 @@ describe("filtering a source's items after the fetch", () => {
   it("matches the words a reader sees, not the link", () => {
     const linked = sampleItem({ link: "https://ocean.test/story", title: "Council debates parking", summary: "No sector news." });
     expect(keepRelevant(source(["ocean"]), config, [linked]).items).toEqual([]);
+  });
+});
+
+describe("news has to be about the right place", () => {
+  const cfg = { watchlist: ["Volta", "voltaeffect"], local_terms: ["Halifax", "Nova Scotia"] } as Pick<Config, "watchlist" | "local_terms">;
+  const watchlisted = { id: "news-volta" } as unknown as SourceConfig;
+  const his = { id: "cur_ocean", keywords: ["ocean"] } as unknown as SourceConfig;
+
+  it("keeps a Halifax story and drops a Ghanaian one, though both say Volta", () => {
+    // The real headline that reached a live campaign.
+    expect(isLocalEnough(watchlisted, cfg, "Over 1,000 NDC women petition A-G for Sedina's release, Volta youth group backs call")).toBe(false);
+    expect(isLocalEnough(watchlisted, cfg, "Volta opens applications for its fall cohort in Halifax")).toBe(true);
+    expect(isLocalEnough(watchlisted, cfg, "Volta River Authority announces an outage")).toBe(false);
+  });
+
+  it("leaves a source the curator gave his own words alone: he chose them", () => {
+    expect(isLocalEnough(his, cfg, "Ocean tech in Vancouver raises a round")).toBe(true);
+  });
+
+  it("changes nothing when the config names no places", () => {
+    expect(isLocalEnough(watchlisted, { watchlist: ["Volta"] } as Pick<Config, "watchlist" | "local_terms">, "Volta Region, Ghana")).toBe(true);
+  });
+});
+
+describe("a watchlist word is a word, not a run of letters", () => {
+  it("no longer matches voltage or Revolta", () => {
+    expect(mentionsAny("High voltage battery plant opens", ["Volta"])).toBe(false);
+    expect(mentionsAny("Revolta Motors expands", ["Volta"])).toBe(false);
+    expect(mentionsAny("Volta, Halifax hub, opens applications", ["Volta"])).toBe(true);
+    expect(mentionsAny("voltaeffect posted an update", ["voltaeffect"])).toBe(true);
   });
 });
