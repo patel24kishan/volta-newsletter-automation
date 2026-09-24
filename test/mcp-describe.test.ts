@@ -97,6 +97,17 @@ describe("the rules Claude is given", () => {
 
   it("forbid offering to write copy, and ask for the list to be shown rather than summarised", () => {
     expect(INSTRUCTIONS).toMatch(/never offer to write, rewrite or "fill in" copy/);
+    expect(INSTRUCTIONS).toMatch(/For add_source, use only what Bader gives you/);
+    expect(INSTRUCTIONS).toMatch(/never invent a feed and never add one he did not name/);
+    expect(INSTRUCTIONS).toMatch(/never let its empty section pass as/);
+    // Bader says a few words, not a sentence: each short phrase must land on one tool.
+    expect(INSTRUCTIONS).toMatch(/"sources", "list sources", "what do we read\?" -> list_sources/);
+    expect(INSTRUCTIONS).toMatch(/"add source", "add feed", "add calendar", "add channel", or a link on its own -> add_source/);
+    expect(INSTRUCTIONS).toMatch(/"turn off X", "pause X", "turn on X" -> set_source/);
+    expect(INSTRUCTIONS).toMatch(/"remove source", "delete source", "stop reading X" -> remove_source, after he has said to/);
+    expect(INSTRUCTIONS).toMatch(/"refresh", "refresh this month", "fetch again" -> prepare_month with force/);
+    expect(INSTRUCTIONS).toMatch(/ask only for what is missing/);
+
     expect(INSTRUCTIONS).toMatch(/note to editor \(not printed\)" are advice for Bader/);
     expect(INSTRUCTIONS).toMatch(/Do not replace the list with a summary/);
   });

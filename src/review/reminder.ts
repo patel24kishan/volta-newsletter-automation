@@ -11,6 +11,7 @@
 import { partsInZone } from "../clock.js";
 import type { Cadence } from "../config.js";
 import type { FirstWorkday } from "../schedule/first-workday.js";
+import { explainSourceNote, parseSourceNote } from "../sources/source-notes.js";
 import { REVIEW_LABEL } from "../surface/blocks.js";
 import type { CandidateGroups } from "./review.js";
 
@@ -46,6 +47,12 @@ export interface ReminderFacts {
   ticked: string[];
   /** "news-volta: empty", "volta-linkedin: failed (...)", as the run recorded them. */
   sourceNotes: string[];
+  /**
+   * The source lines already worked out by whoever calls this, each "- <sentence>". The MCP server
+   * passes the very lines prepare_month and build_draft show, so the reminder cannot drift from
+   * them. Without it, the notes are described here as best they can be (the Slack surface).
+   */
+  sourceLines?: string[];
 }
 
 /** The first-workday greeting: what is ready, what is ticked, and what needs a look. */
@@ -56,7 +63,8 @@ export function greetingText(f: ReminderFacts): string {
   const tickedTitles = all.filter((c) => ticked.has(c.item.id)).map((c) => c.item.title);
   const held = all.filter((c) => c.item.requires_review);
   const attention = [
-    ...f.sourceNotes.map((n) => `- ${describeSourceNote(n)}`),
+    // Each one says what to do about it, in the same words as every other surface.
+    ...(f.sourceLines ?? f.sourceNotes.map((n) => `- ${explainSourceNote(parseSourceNote(n), { periodWord: f.cadence === "monthly" ? "month" : "week" })}`)),
     ...held.map((c) => `- ${REVIEW_LABEL} · ${c.item.title.replace(/[.\s]+$/, "")}${c.item.hold_note ? `. On hold: ${c.item.hold_note}` : ""}${ticked.has(c.item.id) ? " (ticked)" : " (not ticked)"}`),
   ];
   const which = f.cadence === "monthly" ? `${name}'s newsletter` : `The newsletter for ${name}`;
@@ -77,15 +85,6 @@ export function greetingText(f: ReminderFacts): string {
   ].join("\n");
 }
 
-/** A source note in plain words: "news-volta: empty" reads as "news-volta found nothing this time". */
-function describeSourceNote(note: string): string {
-  const m = /^([^:]+): (empty|failed|skipped)(?: \((.*)\))?$/.exec(note);
-  if (!m) return note;
-  const [, id, status, detail] = m;
-  if (status === "empty") return `${id} found nothing this time.`;
-  if (status === "failed") return `${id} could not be read${detail ? `: ${detail}` : ""}.`;
-  return `${id} was skipped${detail ? `: ${detail}` : ""}.`;
-}
 
 /** Said once, when a period passed with no reminder at all (the computer was off all week, say). */
 export function missedText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime">): string {

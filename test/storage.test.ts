@@ -99,3 +99,71 @@ describe("SqliteStorage migration", () => {
     }
   });
 });
+
+describe("sources the curator added", () => {
+  const row = (o: Record<string, unknown> = {}) => ({
+    id: "cur_entrevestor", kind: "rss", type: "news", url: "https://entrevestor.test/feed", terms: [], channel_id: "",
+    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", enabled: true, ...o,
+  });
+
+  it("round-trips one, keeping its lists and its on-off state", () => {
+    const s = new SqliteStorage(":memory:");
+    try {
+      const saved = s.addCuratorSource(row({ terms: ["Halifax startups"], keywords: ["ocean", "tech"], filtered: true }));
+      expect(saved.added_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(s.listCuratorSources()).toEqual([{ ...row({ terms: ["Halifax startups"], keywords: ["ocean", "tech"], filtered: true }), added_at: saved.added_at }]);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("refuses a second source with the same id", () => {
+    const s = new SqliteStorage(":memory:");
+    try {
+      s.addCuratorSource(row());
+      expect(() => s.addCuratorSource(row())).toThrow(StorageError);
+      expect(() => s.addCuratorSource(row())).toThrow(/already exists/);
+      expect(s.listCuratorSources()).toHaveLength(1);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("turns one off and on again, and says so when there is no such source", () => {
+    const s = new SqliteStorage(":memory:");
+    try {
+      s.addCuratorSource(row());
+      expect(s.setCuratorSourceEnabled("cur_entrevestor", false, "2026-09-23T12:00:00.000Z")).toBe(true);
+      expect(s.listCuratorSources()[0]!.enabled).toBe(false);
+      expect(s.setCuratorSourceEnabled("cur_entrevestor", true, "2026-09-23T12:00:00.000Z")).toBe(true);
+      expect(s.listCuratorSources()[0]!.enabled).toBe(true);
+      expect(s.setCuratorSourceEnabled("cur_nothing", false, "2026-09-23T12:00:00.000Z")).toBe(false);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("removes one without touching the items already fetched from it", () => {
+    const s = new SqliteStorage(":memory:");
+    try {
+      s.addCuratorSource(row());
+      const item = sampleItem({ source: "cur_entrevestor", link: "https://entrevestor.test/a" });
+      s.upsertItems([item]);
+      expect(s.removeCuratorSource("cur_entrevestor")).toBe(true);
+      expect(s.listCuratorSources()).toEqual([]);
+      expect(s.getItem(item.id)?.title).toBe(item.title);
+      expect(s.removeCuratorSource("cur_entrevestor")).toBe(false);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("is empty, not broken, on a database made before sources could be added", () => {
+    const s = new SqliteStorage(":memory:");
+    try {
+      expect(s.listCuratorSources()).toEqual([]);
+    } finally {
+      s.close();
+    }
+  });
+});

@@ -18,6 +18,7 @@ import { loadDotEnv } from "../cli/env.js";
 import { resolveClock } from "../clock.js";
 import { loadConfig } from "../config.js";
 import { mailchimpFromEnv } from "../publish/mailchimp.js";
+import { fetchText } from "../http.js";
 import { runWeek } from "../run-week.js";
 import { isLive, liveClockProblem } from "../runtime.js";
 import { SqliteStorage } from "../storage.js";
@@ -57,6 +58,7 @@ let preview: Promise<{ put(html: string, id?: string): string; close(): Promise<
 const server = createNewsletterServer({
   config, clock, storage, alerter, outDir, env,
   runPeriod: () => runWeek({ config, clock, storage, alerter, outDir }),
+  fetchText,
   ...(publisher ? { publisher } : {}),
   ...(audience ? { audience } : {}),
   preview: () => (preview ??= startPreviewServer().catch((e: unknown) => {

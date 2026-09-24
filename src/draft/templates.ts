@@ -61,10 +61,27 @@ const T = {
 
 /** The phrases that name the period, so a monthly newsletter never says "this week". */
 const PERIOD_WORD: Record<Cadence, string> = { weekly: "week", monthly: "month" };
+/**
+ * What an empty section says, by heading, before "this week." or "this month.". Each is written
+ * out: an earlier version lowercased the heading and spliced it into "No ... items", which sent
+ * subscribers "No in the news items this month." A heading added without a line here gets the fallback.
+ */
+const EMPTY: Record<string, string> = {
+  [T.events]: "No upcoming events",
+  [T.pastEvents]: "No events to look back on",
+  [T.news]: "No news to report",
+  [T.linkedin]: "Nothing from Volta on LinkedIn",
+  [T.insights]: "No member updates",
+  [T.ceo]: "No update from the CEO",
+};
+const EMPTY_FALLBACK = "Nothing to report";
+const emptyLine = (stem: string, c: Cadence) => `${stem} this ${PERIOD_WORD[c]}.`;
 const P = {
   title: (c: Cadence) => `This ${PERIOD_WORD[c]} at Volta`,
   subjectPrefix: (c: Cadence) => `Volta this ${PERIOD_WORD[c]}`,
-  none: (section: string, c: Cadence) => `No ${section.toLowerCase()} items this ${PERIOD_WORD[c]}.`,
+  none: (section: string, c: Cadence) => emptyLine(EMPTY[section] ?? EMPTY_FALLBACK, c),
+  /** The related links beyond the few a story shows: "and 35 more". */
+  more: (n: number) => `and ${n} more`,
 };
 const CADENCES: Cadence[] = ["weekly", "monthly"];
 const cadence = (o: DraftOptions): Cadence => o.cadence ?? "weekly";
@@ -73,14 +90,19 @@ const cadence = (o: DraftOptions): Cadence => o.cadence ?? "weekly";
 export const TEMPLATE_PHRASES: string[] = [
   ...CADENCES.map(P.title), T.events, T.pastEvents, T.held, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
   T.brief, T.standard, T.eventsFirst, ...CADENCES.map(P.subjectPrefix), "Volta", "LinkedIn", "Halifax",
-  ...CADENCES.flatMap((c) => ["upcoming events", "in the news", "from volta on linkedin", "key insights", "from the ceo"].map((s) => P.none(s, c))),
+  ...CADENCES.flatMap((c) => [...Object.values(EMPTY), EMPTY_FALLBACK].map((s) => emptyLine(s, c))),
+  // The count in "and 35 more" cannot be enumerated. The verifier checks names, links, dates and
+  // times, never a bare number, so one instance stands for every count.
+  P.more(1),
   // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
   // so if it ever reached a draft the verifier would reject it rather than wave it through.
 ];
 
+/** One entry in an item's link line. Without an href it is plain text among the links ("and 35 more"). */
+type Link = { label: string; href?: string };
 type Block =
   | { kind: "h1" | "h2" | "p"; text: string }
-  | { kind: "item"; title: string; meta: string[]; summary: string; bullets?: string[]; links: { label: string; href: string }[]; image?: { src: string; alt: string } };
+  | { kind: "item"; title: string; meta: string[]; summary: string; bullets?: string[]; links: Link[]; image?: { src: string; alt: string } };
 
 /** The image an item shows, if any: in the email only, never in the text the verifier reads. */
 function imageOf(it: Item, o: DraftOptions): { src: string; alt: string } | undefined {
@@ -219,12 +241,20 @@ function primaryLink(it: Item): { label: string; href: string }[] {
  * useful for Bader while choosing (the candidate list still shows it), meaningless to a subscriber
  * who cannot open it. The newsletter itself carries no link for these entries.
  */
-function draftLinks(it: Item): { label: string; href: string }[] {
+function draftLinks(it: Item): Link[] {
   return it.type === "member_social" ? [] : [...primaryLink(it), ...relatedLinks(it)];
 }
 
-function relatedLinks(it: Item): { label: string; href: string }[] {
-  return (it.related ?? []).map((r) => ({ label: `${T.alsoOn}: ${r.title}`, href: r.link }));
+/**
+ * A story that folded in many duplicates shows a few of them and counts the rest: one real run
+ * printed 38 "Also covered" links in a single paragraph.
+ */
+const MAX_RELATED = 3;
+function relatedLinks(it: Item): Link[] {
+  const related = it.related ?? [];
+  const shown: Link[] = related.slice(0, MAX_RELATED).map((r) => ({ label: `${T.alsoOn}: ${r.title}`, href: r.link }));
+  const rest = related.length - shown.length;
+  return rest > 0 ? [...shown, { label: P.more(rest) }] : shown;
 }
 
 const WEEKDAY = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -256,7 +286,7 @@ export function renderMarkdown(blocks: Block[]): string {
       if (b.summary) out.push(b.summary);
       for (const point of b.bullets ?? []) out.push(`- ${point}`);
       if (b.bullets?.length) out.push("");
-      if (b.links.length) out.push(b.links.map((l) => `[${l.label}](${l.href})`).join(" · "), "");
+      if (b.links.length) out.push(b.links.map((l) => (l.href ? `[${l.label}](${l.href})` : l.label)).join(" · "), "");
       else out.push("");
     }
   }
@@ -338,7 +368,7 @@ function htmlRow(b: Block): string {
     ? `<ul style="margin:8px 0 0 0;padding-left:20px;color:${C.body};">${b.bullets.map((p) => `<li style="margin-bottom:6px;">${esc(p)}</li>`).join("")}</ul>`
     : "";
   const links = b.links.length
-    ? `<div style="margin-top:8px;font-size:14px;line-height:22px;">${b.links.map((l) => `<a href="${esc(l.href)}" style="color:${C.accent};text-decoration:underline;">${esc(l.label)}</a>`).join(" · ")}</div>`
+    ? `<div style="margin-top:8px;font-size:14px;line-height:22px;">${b.links.map((l) => (l.href ? `<a href="${esc(l.href)}" style="color:${C.accent};text-decoration:underline;">${esc(l.label)}</a>` : esc(l.label))).join(" · ")}</div>`
     : "";
   // Fits the 600px column (520px inside the padding) and scales down on a phone. The alt text is the
   // title, so a reader whose client blocks images, or who uses a screen reader, still knows what it is.

@@ -47,8 +47,41 @@ export interface Storage {
    */
   setCuratorEdit(period: string, itemId: string, field: string, value: string | null, nowIso: string): void;
   listCuratorEdits(period: string): CuratorEdit[];
+  /**
+   * A source the curator added himself. It lives here rather than in the config file, which is the
+   * maintainer's and in production comes from a Google Sheet this process cannot write.
+   * Throws StorageError if the id is already taken.
+   */
+  addCuratorSource(row: NewCuratorSource): CuratorSource;
+  /** Every source the curator added, oldest first, enabled or not. */
+  listCuratorSources(): CuratorSource[];
+  /** Turn one off without losing it, or back on. False when there is no such source. */
+  setCuratorSourceEnabled(id: string, enabled: boolean, nowIso: string): boolean;
+  /** Forget a source. Items already fetched from it are left alone. False when there is no such source. */
+  removeCuratorSource(id: string): boolean;
   close(): void;
 }
+
+/** A source the curator added, as stored. `terms` and `keywords` are lists, held as JSON. */
+export interface CuratorSource {
+  id: string;
+  kind: string;
+  type: string;
+  url: string;
+  terms: string[];
+  channel_id: string;
+  fallback_link: string;
+  /** Empty means the newsletter's watchlist applies; see SourceConfig.keywords. */
+  keywords: string[];
+  /** Whether keywords were given at all: without this, "keep everything" and "use the watchlist" look alike. */
+  filtered: boolean;
+  /** The curator's name for it, shown in the source list and never printed in the newsletter. */
+  label: string;
+  enabled: boolean;
+  added_at: string;
+}
+
+export type NewCuratorSource = Omit<CuratorSource, "added_at"> & { added_at?: string };
 
 export interface CuratorEdit {
   period: string;
@@ -146,6 +179,20 @@ export class SqliteStorage implements Storage {
         value TEXT NOT NULL,
         edited_at TEXT NOT NULL,
         PRIMARY KEY (period, item_id, field)
+      );
+      CREATE TABLE IF NOT EXISTS curator_sources (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        type TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',
+        terms TEXT NOT NULL DEFAULT '[]',
+        channel_id TEXT NOT NULL DEFAULT '',
+        fallback_link TEXT NOT NULL DEFAULT '',
+        keywords TEXT NOT NULL DEFAULT '[]',
+        filtered INTEGER NOT NULL DEFAULT 0,
+        label TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL,
+        added_at TEXT NOT NULL
       );
     `);
     this.migrate();
@@ -284,6 +331,40 @@ export class SqliteStorage implements Storage {
       .run(period, itemId, field, value, nowIso);
   }
 
+  addCuratorSource(row: NewCuratorSource): CuratorSource {
+    if (this.db.prepare("SELECT 1 FROM curator_sources WHERE id = ?").get(row.id)) {
+      throw new StorageError(`a source called ${row.id} already exists`);
+    }
+    const saved: CuratorSource = { ...row, added_at: row.added_at ?? new Date().toISOString() };
+    this.db
+      .prepare(`INSERT INTO curator_sources (id, kind, type, url, terms, channel_id, fallback_link, keywords, filtered, label, enabled, added_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(saved.id, saved.kind, saved.type, saved.url, JSON.stringify(saved.terms), saved.channel_id, saved.fallback_link,
+        JSON.stringify(saved.keywords), saved.filtered ? 1 : 0, saved.label, saved.enabled ? 1 : 0, saved.added_at);
+    return saved;
+  }
+
+  listCuratorSources(): CuratorSource[] {
+    const rows = this.db.prepare("SELECT * FROM curator_sources ORDER BY added_at ASC, id ASC").all() as unknown as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id), kind: String(r.kind), type: String(r.type), url: String(r.url),
+      terms: parseList(r.terms), channel_id: String(r.channel_id), fallback_link: String(r.fallback_link),
+      keywords: parseList(r.keywords), filtered: Number(r.filtered) === 1, label: String(r.label),
+      enabled: Number(r.enabled) === 1, added_at: String(r.added_at),
+    }));
+  }
+
+  setCuratorSourceEnabled(id: string, enabled: boolean, _nowIso: string): boolean {
+    const res = this.db.prepare("UPDATE curator_sources SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
+    return Number(res.changes) > 0;
+  }
+
+  removeCuratorSource(id: string): boolean {
+    // Only the source goes; its items stay, so a newsletter already sent can still be traced back.
+    const res = this.db.prepare("DELETE FROM curator_sources WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
   listCuratorEdits(period: string): CuratorEdit[] {
     return this.db.prepare("SELECT period, item_id, field, value, edited_at FROM curator_edits WHERE period = ? ORDER BY edited_at ASC").all(period) as unknown as CuratorEdit[];
   }
@@ -357,4 +438,15 @@ function packExtra(it: Item): string | null {
   const extra: Record<string, unknown> = {};
   for (const key of EXTRA_FIELDS) if (it[key] !== undefined) extra[key] = it[key];
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
+}
+
+/** A JSON list column back as strings. A row written by hand, or corrupted, reads as empty. */
+function parseList(value: unknown): string[] {
+  if (typeof value !== "string" || value === "") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
 }

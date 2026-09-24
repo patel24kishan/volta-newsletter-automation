@@ -176,7 +176,7 @@ describe("end-to-end: fetch through Slack approval and send", () => {
     // The other two sources still produced a verified newsletter.
     expect(run.after_dedupe).toBeGreaterThan(0);
     expect(run.drafts.every((d) => d.verified)).toBe(true);
-    expect(readFileSync(run.drafts[0]!.file_md, "utf8")).toContain("No in the news items this week.");
+    expect(readFileSync(run.drafts[0]!.file_md, "utf8")).toContain("No news to report this week.");
   });
 
   it("dry-run reaches nobody: no Slack message, no campaign, no send", async () => {

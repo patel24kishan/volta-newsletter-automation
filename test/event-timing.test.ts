@@ -139,7 +139,7 @@ describe("the newsletter", () => {
 
   it("with only past events chosen, says there are no upcoming ones rather than inventing any", () => {
     const md = buildDrafts([demo], { timeZone: TZ, layouts: ["events-first"] })[0]!.markdown;
-    expect(md).toContain("No upcoming events items this week.");
+    expect(md).toContain("No upcoming events this week.");
     expect(md).toContain("## Last month at Volta");
   });
 });

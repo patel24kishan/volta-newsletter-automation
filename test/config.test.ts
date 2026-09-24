@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, loadConfig, validateConfig } from "../src/config.js";
+import { ConfigError, loadConfig, validateConfig, validateSource } from "../src/config.js";
 
 describe("demo/config.json", () => {
   it("loads and has the live demo sources enabled: news searches, the calendar, manual events, member updates and LinkedIn", async () => {
@@ -66,5 +66,27 @@ describe("validateConfig", () => {
 
   it("rejects malformed holiday overrides", () => {
     expect(() => validateConfig({ ...base, holiday_overrides: ["24/12/2026"] })).toThrow(/YYYY-MM-DD/);
+  });
+});
+
+describe("validateSource, used for the config file and for a source the curator adds", () => {
+  const base = () => ({ id: "s1", kind: "rss", type: "news", url: "https://news.test/rss", enabled: true }) as Record<string, unknown>;
+
+  it("accepts a good source and says nothing", () => {
+    expect(validateSource(base(), "source s1")).toEqual([]);
+  });
+
+  it("builds a news search's address from its words, so nobody types a query string", () => {
+    const src = { id: "s2", kind: "google_news", type: "news", url: "", enabled: true, terms: ["Volta Halifax"] } as Record<string, unknown>;
+    expect(validateSource(src, "source s2")).toEqual([]);
+    expect(String(src.url)).toContain("news.google.com/rss/search");
+  });
+
+  it("gives the same reasons wherever it is called from", () => {
+    expect(validateSource({ ...base(), url: "ftp://news.test" }, "source s1")).toEqual(["source s1.url must be http(s)"]);
+    expect(validateSource({ ...base(), kind: "carrier_pigeon" }, "sources[3]")[0]).toContain("sources[3].kind must be one of");
+    expect(validateSource({ ...base(), enabled: "yes" }, "source s1")).toContain("source s1.enabled must be boolean");
+    expect(validateSource({ id: "s3", kind: "slack_channel", type: "member_social", enabled: true }, "source s3"))
+      .toEqual(["source s3.channel_id must be a Slack channel id such as C0123ABCD for a slack_channel source"]);
   });
 });

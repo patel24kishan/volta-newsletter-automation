@@ -36,7 +36,9 @@ describe("the first-workday greeting", () => {
 
   it("lists every source that needs a look, and every held item with its label and reason", () => {
     const t = greetingText(facts({ sourceNotes: ["news-volta: empty", "volta-linkedin: failed (LinkedIn served a login wall)"] }));
-    expect(t).toContain("Needs your attention:\n- news-volta found nothing this time.\n- volta-linkedin could not be read: LinkedIn served a login wall.");
+    expect(t).toContain("Needs your attention:\n- news-volta found nothing this time.");
+    // A failure he can do nothing about says so, rather than leaving him wondering.
+    expect(t).toContain("- volta-linkedin could not be read: LinkedIn served a login wall. Nothing to do: LinkedIn showed a sign-in page instead of the public one. It usually works next time.");
     expect(t).toContain("- MARKED FOR REVIEW · Bellwether Soil: Good material, can't run it yet. On hold: REVISIT w/c Sep 28 (embargo) (not ticked)");
   });
 
@@ -44,6 +46,20 @@ describe("the first-workday greeting", () => {
     const robotics = sampleItem({ link: "https://volta.slack.com/p2", title: "Harbourlight Robotics", requires_review: true, hold_note: "embargo" });
     const t = greetingText(facts({ groups: candidateGroups({ candidates: rankItems([robotics], NOW) }), ticked: [] }));
     expect(t).toContain("- MARKED FOR REVIEW · Harbourlight Robotics. On hold: embargo (not ticked)");
+  });
+
+  it("shows the very lines the other surfaces show, when it is given them", () => {
+    // The MCP server hands over what prepare_month and build_draft print, so the three cannot drift.
+    const line = "- Member updates could not be read: Slack refused the request: not_in_channel. The bot is not in that channel. Open it, type /invite @Volta Newsletter, then say: refresh this month. (https://slack.com/app_redirect?channel=C0C2H7WAUJX)";
+    const t = greetingText(facts({ sourceNotes: ["member-updates: failed (Slack refused the request: not_in_channel)"], sourceLines: [line] }));
+    expect(t).toContain(`Needs your attention:
+${line}`);
+    expect(t).not.toContain("member-updates could not be read"); // never the raw id when he named it
+  });
+
+  it("says whose job a missing token is", () => {
+    const t = greetingText(facts({ sourceNotes: ["member-updates: failed (SLACK_BOT_TOKEN is not set, so the channel cannot be read)"] }));
+    expect(t).toContain("The maintainer has to set SLACK_BOT_TOKEN on this computer.");
   });
 
   it("says so when nothing needs attention", () => {

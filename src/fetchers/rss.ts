@@ -1,5 +1,8 @@
 /**
- * RSS 2.0 fetcher. Demo source: Google News search feed for Volta.
+ * Feed fetcher for RSS 2.0 and Atom. Demo source: Google News search feed for Volta.
+ * Atom is read here rather than in a second fetcher because the two formats differ only in where
+ * the same handful of fields live, and plenty of sites publish Atom only. A curator who pastes
+ * such a link was being told his link was wrong when it was not.
  * Keeps only items inside the content window and mentioning a watchlist term.
  * Summary is extracted from the description when it says more than the title; otherwise the
  * item is flagged needs_summary so Bader decides.
@@ -10,15 +13,19 @@ import { fetchText as defaultFetchText } from "../http.js";
 import { isAbsoluteHttpUrl, itemId, type Item } from "../schema.js";
 import { collapseWhitespace, decodeEntities, firstSentences, mentionsAny, stripHtml } from "../text.js";
 import { describeWindow, windowsOf } from "../schedule/period.js";
+import { hasOwnKeywords, keywordsFor } from "../sources/relevance.js";
 import type { FetchContext, FetchResult, Fetcher } from "./types.js";
 
-interface RawRssItem {
-  title?: unknown;
-  link?: unknown;
-  guid?: unknown;
-  pubDate?: unknown;
-  description?: unknown;
-  source?: unknown;
+/** What an RSS <item> and an Atom <entry> both come down to, already flattened to strings. */
+export interface FeedEntry {
+  title: string;
+  link: string;
+  /** The feed's own id for the entry (RSS <guid>, Atom <id>); falls back to the link. */
+  guid: string;
+  /** The date exactly as the feed wrote it; the caller parses it so it can warn on junk. */
+  date: string;
+  description: string;
+  publisher: string;
 }
 
 export class RssFetcher implements Fetcher {
@@ -44,13 +51,9 @@ export class RssFetcher implements Fetcher {
     let outsideWindow = 0;
     let offTopic = 0;
 
-    for (const raw of parsed.items) {
-      const title = text(raw.title);
-      const link = text(raw.link);
-      const guid = text(raw.guid) || link;
-      const description = stripHtml(text(raw.description));
-      const publisher = text(raw.source);
-      const date = parseDate(text(raw.pubDate));
+    for (const entry of parsed.items) {
+      const { title, link, guid, description, publisher } = entry;
+      const date = parseDate(entry.date);
 
       if (!title || !isAbsoluteHttpUrl(link)) {
         warnings.push(`skipped item without title or absolute link: "${title || guid || "?"}"`);
@@ -65,9 +68,10 @@ export class RssFetcher implements Fetcher {
         continue;
       }
       const haystack = `${title} ${description} ${publisher}`;
-      if (!mentionsAny(haystack, ctx.config.watchlist)) {
+      const terms = keywordsFor(source, ctx.config);
+      if (!mentionsAny(haystack, terms)) {
         offTopic++;
-        warnings.push(`off-topic (no watchlist term): "${title}"`);
+        warnings.push(`off-topic (no ${hasOwnKeywords(source) ? "keyword for this source" : "watchlist term"}): "${title}"`);
         continue;
       }
 
@@ -95,7 +99,7 @@ export class RssFetcher implements Fetcher {
   }
 }
 
-export function parseRss(body: string): { items: RawRssItem[]; title: string } | { error: string } {
+export function parseRss(body: string): { items: FeedEntry[]; title: string } | { error: string } {
   if (!body || body.trim() === "") return { error: "empty response body" };
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", textNodeName: "#text", cdataPropName: "#cdata" });
   let doc: Record<string, unknown>;
@@ -106,10 +110,71 @@ export function parseRss(body: string): { items: RawRssItem[]; title: string } |
   }
   const rss = doc.rss as Record<string, unknown> | undefined;
   const channel = rss?.channel as Record<string, unknown> | undefined;
-  if (!channel) return { error: "no <rss><channel> element; not an RSS 2.0 feed" };
-  const rawItems = channel.item;
-  const items: RawRssItem[] = Array.isArray(rawItems) ? (rawItems as RawRssItem[]) : rawItems ? [rawItems as RawRssItem] : [];
-  return { items, title: text(channel.title) };
+  if (channel) {
+    return { items: children(channel.item).map(fromRssItem), title: text(channel.title) };
+  }
+  const feed = doc.feed as Record<string, unknown> | undefined;
+  if (feed && typeof feed === "object") {
+    // The feed's own title is the only publisher an entry without its own <source> has.
+    const feedTitle = atomText(feed.title);
+    return { items: children(feed.entry).map((e) => fromAtomEntry(e, feedTitle)), title: feedTitle };
+  }
+  return { error: "no <rss><channel> or <feed><entry> element; not an RSS or Atom feed" };
+}
+
+function fromRssItem(raw: Record<string, unknown>): FeedEntry {
+  const link = text(raw.link);
+  return {
+    title: text(raw.title),
+    link,
+    guid: text(raw.guid) || link,
+    date: text(raw.pubDate),
+    description: stripHtml(text(raw.description)),
+    publisher: text(raw.source),
+  };
+}
+
+function fromAtomEntry(raw: Record<string, unknown>, feedTitle: string): FeedEntry {
+  const id = text(raw.id);
+  // An Atom id is often opaque ("t3_1abcde" on Reddit), so it stands in for the link only when
+  // the feed happened to use a URL as the id.
+  const link = linkHref(raw.link) || (isAbsoluteHttpUrl(id) ? id : "");
+  // <published> is when the entry appeared; <updated> only says when it last changed, so it is
+  // the fallback. <summary> is the short form by definition, so it wins over the full <content>.
+  const source = raw.source as Record<string, unknown> | undefined;
+  return {
+    title: atomText(raw.title),
+    link,
+    guid: id || link,
+    date: text(raw.published) || text(raw.updated),
+    description: stripHtml(text(raw.summary !== undefined ? raw.summary : raw.content)),
+    publisher: (source && typeof source === "object" ? atomText(source.title) : "") || feedTitle,
+  };
+}
+
+/** fast-xml-parser gives one child as an object and repeats as an array; callers want a list. */
+function children(v: unknown): Record<string, unknown>[] {
+  if (Array.isArray(v)) return v as Record<string, unknown>[];
+  if (v && typeof v === "object") return [v as Record<string, unknown>];
+  return [];
+}
+
+/**
+ * Atom keeps the URL in an attribute rather than in text, and an entry may carry several links.
+ * rel is optional and means "alternate" when absent, which is the readable page we want; the
+ * others (self, enclosure, replies) are used only when there is nothing better.
+ */
+function linkHref(v: unknown): string {
+  const links = children(v);
+  const alternate = links.find((l) => l["@_rel"] === undefined || l["@_rel"] === "alternate");
+  return text(alternate?.["@_href"]) || text(links.find((l) => l["@_href"] !== undefined)?.["@_href"]);
+}
+
+/** An Atom title or content may be escaped HTML; anything else is taken as it stands. */
+function atomText(v: unknown): string {
+  const type = v && typeof v === "object" ? (v as Record<string, unknown>)["@_type"] : undefined;
+  const s = text(v);
+  return type === "html" || type === "xhtml" ? stripHtml(s) : s;
 }
 
 /** fast-xml-parser gives strings, numbers, or objects with #text/#cdata/@_ attrs; flatten to a string. */

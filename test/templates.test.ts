@@ -57,11 +57,45 @@ describe("buildDrafts", () => {
     expect(md.indexOf("## Upcoming events")).toBeLessThan(md.indexOf("## In the news"));
   });
 
-  it("says so when a section is empty instead of dropping it", () => {
-    const d = buildDrafts([post], { timeZone: TZ })[1]!;
-    expect(d.markdown).toContain("No upcoming events items this week.");
-    expect(d.markdown).toContain("No in the news items this week.");
-    expect(d.verification.ok).toBe(true);
+  it("says so when a section is empty instead of dropping it, in a sentence a reader would write", () => {
+    // A lowercased heading spliced into "No ... items" once printed "No in the news items this week."
+    for (const [cadence, period] of [["weekly", "week"], ["monthly", "month"]] as const) {
+      for (const d of buildDrafts([post], { timeZone: TZ, cadence })) {
+        expect(d.markdown, d.id).toContain(`## Upcoming events\n\nNo upcoming events this ${period}.`);
+        expect(d.markdown, d.id).toContain(`## In the news\n\nNo news to report this ${period}.`);
+        expect(d.html, d.id).toContain(`No news to report this ${period}.`);
+        expect(d.markdown, d.id).not.toMatch(/items this (week|month)/);
+        expect(d.verification.violations, d.id).toEqual([]);
+      }
+      const d = buildDrafts([news], { timeZone: TZ, cadence })[1]!;
+      expect(d.markdown).toContain(`## From Volta on LinkedIn\n\nNothing from Volta on LinkedIn this ${period}.`);
+      expect(d.html).toContain(`Nothing from Volta on LinkedIn this ${period}.`);
+      expect(d.verification.violations).toEqual([]);
+    }
+  });
+
+  it("shows at most three related links and counts the rest in plain text, markdown and html alike", () => {
+    // One real run folded 38 duplicates into a story and printed every one as an "Also covered" link.
+    const related = Array.from({ length: 20 }, (_, i) => ({ source: "google-news", link: `https://news.example/story-${i + 1}`, title: `Coverage ${i + 1}` }));
+    const story = sampleItem({ type: "news", link: "https://news.example/story", title: "Volta opens a new floor", raw_excerpt: "Volta opens a new floor.", related });
+    for (const d of buildDrafts([story], { timeZone: TZ })) {
+      expect(d.markdown.match(/\[Also covered: /g), d.id).toHaveLength(3);
+      expect(d.markdown, d.id).toContain("[Also covered: Coverage 3](https://news.example/story-3) · and 17 more\n");
+      expect(d.markdown, d.id).not.toContain("story-4");
+      expect(d.html.match(/Also covered: /g), d.id).toHaveLength(3);
+      expect(d.html, d.id).toContain("Coverage 3</a> · and 17 more</div>");
+      expect(d.html, d.id).not.toContain("story-4");
+      expect(d.verification.violations, d.id).toEqual([]);
+    }
+  });
+
+  it("a story with three or fewer related links lists them all and says nothing about more", () => {
+    const related = Array.from({ length: 3 }, (_, i) => ({ source: "google-news", link: `https://news.example/story-${i + 1}`, title: `Coverage ${i + 1}` }));
+    const d = buildDrafts([sampleItem({ related })], { timeZone: TZ })[1]!;
+    expect(d.markdown.match(/\[Also covered: /g)).toHaveLength(3);
+    expect(d.markdown).not.toMatch(/and \d+ more/);
+    expect(d.html).not.toMatch(/and \d+ more/);
+    expect(d.verification.violations).toEqual([]);
   });
 
   it("escapes html and includes the footer when given", () => {

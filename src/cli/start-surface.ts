@@ -13,6 +13,7 @@ import type { RankedItem } from "../pipeline/rank.js";
 import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import type { RunSummary } from "../run-week.js";
 import { addDays } from "../schedule/first-workday.js";
+import { effectiveSources } from "../sources/curator-sources.js";
 import type { SqliteStorage } from "../storage.js";
 import type { ReminderInput } from "../surface/blocks.js";
 import type { SlackClient, SurfaceState } from "../surface/handlers.js";
@@ -76,7 +77,7 @@ export async function startSurface(o: SurfaceOptions): Promise<Surface> {
   // After the preview server, so the draft's page is served again at the address Bader already has.
   if (o.restored) restoreSession(st, o.restored);
 
-  const manual = config.sources.find((s) => s.kind === "manual" && s.enabled);
+  const manual = effectiveSources(config, storage).find((s) => s.kind === "manual" && s.enabled);
   if (manual?.fallback_link) {
     st.storage = storage;
     st.manualSource = { ...manual, fallback_link: manual.fallback_link };

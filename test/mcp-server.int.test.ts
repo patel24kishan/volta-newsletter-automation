@@ -60,6 +60,7 @@ async function connect(o: { live?: boolean; mail?: Publisher } = {}) {
   const server = createNewsletterServer({
     config, clock, storage, alerter: new MemoryAlerter(), outDir: dir, env: { ALLOW_LIVE: o.live ? "1" : "0" },
     runPeriod: async () => { runs++; return runWeek({ config, clock, storage, alerter: new MemoryAlerter(), outDir: dir, fetchText: async (u) => BODIES[u] ?? "" }); },
+    fetchText: async (u: string) => { const b = BODIES[u]; if (b === undefined) throw new Error(`GET ${u} failed`); return b; },
     ...(o.mail ? { publisher: o.mail, audience: { audienceName: "Test", memberCount: 2 } } : {}),
     preview: async () => ({ put: (_html: string, id?: string) => `http://127.0.0.1:3111/preview/${id ?? "x"}` }),
   });
@@ -85,7 +86,7 @@ describe("the newsletter tools, as Claude uses them", () => {
   it("offers the tools with the rules as instructions, and takes no newsletter text where it must not", async () => {
     const c = await connect();
     const { tools } = await c.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "approve_draft", "build_draft", "edit_item", "list_candidates", "monthly_reminder", "newsletter_status", "prepare_month", "send_campaign", "set_selection"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_source", "send_campaign", "set_selection", "set_source"]);
     expect(c.client.getInstructions()).toBe(INSTRUCTIONS);
     expect(INSTRUCTIONS).toMatch(/Never write newsletter text yourself/);
     // Building, approving and sending take ids only: Claude cannot hand them words to publish.
@@ -257,5 +258,263 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect(rebuilt).toContain("Where: Volta, 1505 Barrington St");
     expect(rebuilt).toContain("Demo Night");
     await after.close();
+  });
+});
+
+describe("the sources Bader manages himself", () => {
+  const FEED = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>Volta member raises a seed round</title><link>https://entrevestor.test/a</link><guid>ea</guid><pubDate>Thu, 10 Sep 2026 09:00:00 GMT</pubDate><description>A Volta member closed a seed round. The company is in Halifax.</description></item>
+</channel></rss>`;
+
+  it("lists what is read, adds a feed, and its items appear once the month is fetched again", async () => {
+    BODIES["https://entrevestor.test/feed"] = FEED;
+    try {
+      const c = await connect();
+      await c.call("prepare_month");
+
+      const before = await c.call("list_sources");
+      expect(before.text).toContain("google-news (a feed)");
+      expect(before.text).toContain("set up by the maintainer");
+      expect(before.text).not.toContain("Entrevestor");
+
+      const added = await c.call("add_source", { kind: "rss", url: "https://entrevestor.test/feed", name: "Entrevestor" });
+      expect(added.isError).toBe(false);
+      expect(added.text).toContain("Added a feed: Entrevestor reads https://entrevestor.test/feed");
+      expect(added.text).toContain("keeps the newsletter's watchlist (Volta)");
+      expect(added.text).toContain("Read it: 1 item(s)"); // the one-off check at add time
+      expect(added.text).toContain("say: refresh this month");
+      expect(added.text).toContain("Its id is cur_entrevestor.");
+
+      // Not in the list until the month is fetched again, exactly as the message said.
+      expect((await c.call("list_candidates")).text).not.toContain("Volta member raises a seed round");
+      await c.call("prepare_month", { force: true });
+      expect((await c.call("list_candidates")).text).toContain("Volta member raises a seed round");
+
+      const after = await c.call("list_sources");
+      expect(after.text).toContain("Entrevestor (a feed)");
+      expect(after.text).toContain("added by you on 2026-10-01");
+      await c.close();
+    } finally {
+      delete BODIES["https://entrevestor.test/feed"];
+    }
+  });
+
+  it("turns one off, changes its keywords, and removes it only when he has said so", async () => {
+    BODIES["https://entrevestor.test/feed"] = FEED;
+    try {
+      const c = await connect();
+      await c.call("add_source", { kind: "rss", url: "https://entrevestor.test/feed", name: "Entrevestor", check: false });
+
+      expect((await c.call("set_source", { source_id: "cur_entrevestor", keywords: ["seed round"] })).text)
+        .toContain("keeps only items mentioning seed round");
+      expect((await c.call("set_source", { source_id: "cur_entrevestor", enabled: false })).text).toContain("is now off");
+      expect((await c.call("list_sources")).text).toContain("off · added by you");
+
+      // Still his after being turned off: the keywords survive, and it can be turned back on.
+      expect((await c.call("set_source", { source_id: "cur_entrevestor", enabled: true })).text)
+        .toContain("is now on, and keeps only items mentioning seed round");
+
+      const refused = await c.call("remove_source", { source_id: "cur_entrevestor", confirm: false });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain("only once Bader has said to remove it");
+      expect((await c.call("remove_source", { source_id: "cur_entrevestor", confirm: true })).text).toContain("Removed Entrevestor");
+      expect((await c.call("list_sources")).text).not.toContain("Entrevestor");
+      await c.close();
+    } finally {
+      delete BODIES["https://entrevestor.test/feed"];
+    }
+  });
+
+  it("will not change or remove one the maintainer set up, and says who to ask", async () => {
+    const c = await connect();
+    const changed = await c.call("set_source", { source_id: "google-news", enabled: false });
+    expect(changed.isError).toBe(true);
+    expect(changed.text).toBe("google-news is set up by the maintainer in the config file; ask them to change it.");
+    expect((await c.call("remove_source", { source_id: "google-news", confirm: true })).text).toContain("ask them to remove it");
+    expect((await c.call("set_source", { source_id: "cur_nothing", enabled: false })).text).toContain("There is no source called cur_nothing");
+    await c.close();
+  });
+
+  it("says what a feed is missing rather than guessing at it", async () => {
+    const c = await connect();
+    const bad = await c.call("add_source", { kind: "rss", url: "entrevestor.test/feed" });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain("a feed needs its full address, starting with https://");
+    expect((await c.call("add_source", { kind: "google_news" })).text).toContain("A news search needs the words to search for");
+    expect((await c.call("add_source", { kind: "slack_channel", channel_id: "#members" })).text).toContain("Copy link");
+    expect((await c.call("list_sources")).text).not.toContain("cur_");
+    await c.close();
+  });
+
+  it("keeps a Slack channel he added but leaves it off while the token is missing, and never blocks the newsletter", async () => {
+    const c = await connect();
+    const added = await c.call("add_source", { kind: "slack_channel", channel_id: "https://volta.slack.com/archives/C0C2H7WAUJX", name: "Member updates" });
+    expect(added.isError).toBe(false);
+    expect(added.text).toContain("reads the Slack channel C0C2H7WAUJX");
+    expect(added.text).toContain("SLACK_BOT_TOKEN is not set");
+    expect(added.text).toContain("only the maintainer can do");
+    expect((await c.call("list_sources")).text).toContain("off · added by you");
+
+    // The month still prepares and the draft still builds, with the other sources.
+    const prepared = await c.call("prepare_month");
+    expect(prepared.isError).toBe(false);
+    expect(prepared.text).toContain("candidates");
+    await c.call("build_draft");
+    expect((await c.call("newsletter_status")).text).toContain("Draft:");
+    await c.close();
+  });
+});
+
+describe("when sources are down, in the chat Bader sees", () => {
+  it("prepares the month anyway, names what needs attention, and still builds a draft", async () => {
+    // Every feed down: the worst case, and still no dead end for him.
+    const saved = { ...BODIES };
+    try {
+      for (const k of Object.keys(BODIES)) delete BODIES[k];
+      const c = await connect();
+      const prepared = await c.call("prepare_month");
+      expect(prepared.isError).toBe(false);
+      expect(prepared.text).toContain("Sources that need attention:");
+      expect(prepared.text).toMatch(/google-news (could not be read|found nothing)/);
+
+      // Nothing was found, so nothing is built, and he is told why rather than "tick something".
+      const built = await c.call("build_draft");
+      expect(built.text).toContain("No candidates were found for this month, so there is nothing to build.");
+      expect(built.text).toContain("Sources that need attention:");
+      expect(built.text).toContain("Nothing is sent, and nothing is invented.");
+      expect(built.text).not.toContain("Tick at least one item");
+      await c.close();
+    } finally {
+      Object.assign(BODIES, saved);
+    }
+  });
+});
+
+describe("a source that did not work, as Bader reads it", () => {
+  it("says what to do and where to go, and shows a channel link he can click", async () => {
+    const c = await connect();
+    await c.call("add_source", { kind: "slack_channel", channel_id: "https://volta.slack.com/archives/C0C2H7WAUJX", name: "Member updates" });
+
+    const list = await c.call("list_sources");
+    expect(list.text).toContain("open: https://slack.com/app_redirect?channel=C0C2H7WAUJX");
+    expect(list.text).toContain("open: https://news.test/rss"); // every source carries its link
+    await c.close();
+  });
+
+  it("explains a failed source in the month's preparation, with the remedy", async () => {
+    const saved = BODIES["https://cal.test/ics"];
+    try {
+      delete BODIES["https://cal.test/ics"];
+      const c = await connect();
+      const prepared = await c.call("prepare_month");
+      expect(prepared.text).toContain("Sources that need attention:");
+      expect(prepared.text).toContain("volta-calendar could not be read");
+      expect(prepared.text).toContain("The address answered with nothing at all. Check the link, then say: refresh this month.");
+      expect(prepared.text).toContain("(https://cal.test/ics)");
+      await c.close();
+    } finally {
+      BODIES["https://cal.test/ics"] = saved!;
+    }
+  });
+});
+
+describe("a feed of his that the watchlist empties", () => {
+  // QA's blocker: he adds the feed he cares about, every story is dropped for not saying "Volta",
+  // and every surface tells him it was a quiet month.
+  const NATIONAL = `<?xml version="1.0"?><rss version="2.0"><channel><title>National tech</title>
+<item><title>Calgary fintech raises a seed round</title><link>https://nat.test/a</link><guid>a</guid><pubDate>Thu, 10 Sep 2026 09:00:00 GMT</pubDate><description>A Calgary company raised money.</description></item>
+<item><title>Toronto biotech hires a chief scientist</title><link>https://nat.test/b</link><guid>b</guid><pubDate>Fri, 11 Sep 2026 09:00:00 GMT</pubDate><description>A Toronto company hired someone.</description></item>
+</channel></rss>`;
+
+  it("says how many it published and how to keep them, instead of calling it quiet", async () => {
+    BODIES["https://nat.test/feed"] = NATIONAL;
+    try {
+      const c = await connect();
+      const added = await c.call("add_source", { kind: "rss", url: "https://nat.test/feed", name: "National tech" });
+      expect(added.text).toContain("It published 2 item(s), but none of them mention Volta.");
+      expect(added.text).toContain("Fetching again now would drop them again.");
+      expect(added.text).toContain("To keep everything it publishes, say: keep everything from National tech.");
+      expect(added.text).not.toContain("quiet");
+
+      const prepared = await c.call("prepare_month", { force: true });
+      expect(prepared.text).toContain("It published 2 item(s), but none of them mention Volta.");
+      expect(prepared.text).not.toMatch(/search words may be too narrow/);
+
+      // And his way out works, in his words.
+      await c.call("set_source", { source_id: "cur_national-tech", keywords: [] });
+      await c.call("prepare_month", { force: true });
+      expect((await c.call("list_candidates")).text).toContain("Calgary fintech raises a seed round");
+      await c.close();
+    } finally {
+      delete BODIES["https://nat.test/feed"];
+    }
+  });
+
+  it("does not claim a calendar is filtered by the watchlist, since it never was", async () => {
+    const c = await connect();
+    const added = await c.call("add_source", { kind: "ics", url: "https://cal.test/ics", name: "Partner calendar", check: false });
+    expect(added.text).toContain("keeps everything it publishes");
+    expect(added.text).not.toContain("watchlist");
+    expect((await c.call("list_sources")).text).toContain("Partner calendar");
+    await c.close();
+  });
+
+  it("never promises to read a Slack channel it has just switched off", async () => {
+    const c = await connect();
+    const added = await c.call("add_source", { kind: "slack_channel", channel_id: "https://volta.slack.com/archives/C0C2H7WAUJX", name: "Member updates" });
+    expect(added.text).toContain("left it switched off");
+    expect(added.text).not.toContain("It will be read when this month is next prepared");
+    await c.close();
+  });
+});
+
+describe("what Bader is told about sources, wherever he reads it", () => {
+  const NATIONAL = `<?xml version="1.0"?><rss version="2.0"><channel><title>National tech</title>
+<item><title>Calgary fintech raises a seed round</title><link>https://nat.test/a</link><guid>a</guid><pubDate>Thu, 10 Sep 2026 09:00:00 GMT</pubDate><description>A Calgary company raised money.</description></item>
+<item><title>Toronto biotech hires a chief scientist</title><link>https://nat.test/b</link><guid>b</guid><pubDate>Fri, 11 Sep 2026 09:00:00 GMT</pubDate><description>A Toronto company hired someone.</description></item>
+</channel></rss>`;
+
+  it("says the same thing in the reminder, the preparation and the draft when a feed is emptied", async () => {
+    BODIES["https://nat.test/feed"] = NATIONAL;
+    try {
+      const c = await connect();
+      await c.call("add_source", { kind: "rss", url: "https://nat.test/feed", name: "National tech", check: false });
+      const prepared = await c.call("prepare_month", { force: true });
+      const reminder = await c.call("monthly_reminder");
+
+      const said = "It published 2 item(s), but none of them mention Volta.";
+      expect(prepared.text).toContain(said);
+      expect(reminder.text).toContain(said);
+      expect(reminder.text).not.toContain("quiet month");
+      expect(reminder.text).toContain("National tech"); // his name, never cur_national-tech
+      await c.close();
+    } finally {
+      delete BODIES["https://nat.test/feed"];
+    }
+  });
+
+  it("never says his own events source found nothing, in the reminder either", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+    expect((await c.call("monthly_reminder")).text).not.toContain("manual-events");
+    await c.close();
+  });
+
+  it("leaves a source that did its job out of the attention list", async () => {
+    // Dropping the odd off-topic story is the filter working, not a problem to report.
+    const c = await connect();
+    const prepared = await c.call("prepare_month");
+    expect(prepared.text).not.toContain("dropped as off-topic");
+    await c.close();
+  });
+
+  it("says a calendar keeps everything, in the list and when it is turned off, not just when added", async () => {
+    const c = await connect();
+    await c.call("add_source", { kind: "ics", url: "https://cal.test/ics", name: "Partner calendar", check: false });
+    expect((await c.call("list_sources")).text).toMatch(/Partner calendar[\s\S]*?keeps everything it publishes/);
+    const off = await c.call("set_source", { source_id: "cur_partner-calendar", enabled: false });
+    expect(off.text).toContain("keeps everything it publishes");
+    expect(off.text).not.toContain("watchlist");
+    await c.close();
   });
 });

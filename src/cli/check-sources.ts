@@ -9,6 +9,7 @@ import { fetcherFor } from "../fetchers/index.js";
 import { cadenceOf, loadConfig } from "../config.js";
 import { describeWindow, windowsFor } from "../schedule/period.js";
 import { SqliteStorage } from "../storage.js";
+import { effectiveSources } from "../sources/curator-sources.js";
 
 loadDotEnv();
 const config = await loadConfig(process.env.CONFIG_PATH ?? "demo/config.json");
@@ -24,7 +25,7 @@ console.log(`  content ${describeWindow(w.content, tz)} | upcoming events ${desc
 console.log("");
 
 let failures = 0;
-for (const source of config.sources) {
+for (const source of effectiveSources(config, storage)) {
   if (!source.enabled) {
     console.log(`SKIP   ${source.id}  (disabled in config)`);
     continue;

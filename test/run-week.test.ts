@@ -73,7 +73,7 @@ describe("runWeek", () => {
     expect(s.sources.map((x) => `${x.id}:${x.status}`)).toEqual(["google-news:empty", "volta-calendar:ok", "volta-linkedin:failed"]);
     expect(alerter.sent.map((a) => `${a.level}:${a.source}`)).toEqual(["warning:google-news", "error:volta-linkedin"]);
     expect(alerter.sent[1]!.message).toMatch(/HTTP 503/);
-    expect(readFileSync(s.drafts[0]!.file_md, "utf8")).toContain("No in the news items this week.");
+    expect(readFileSync(s.drafts[0]!.file_md, "utf8")).toContain("No news to report this week.");
   });
 
   it("reports the Thanksgiving shift and a due reminder when run as Tuesday 08:30 after the holiday", async () => {
@@ -254,5 +254,175 @@ describe("runWeek on a monthly cadence (integration)", () => {
     const s = await runWeek({ config, clock, storage, alerter: new MemoryAlerter(), outDir, fetchText: monthlyFetch });
     expect(titles(s)).toEqual([]);
     expect(s.sources.find((x) => x.id === "volta-calendar")!.warnings.join()).toMatch(/3 event\(s\) outside the window/);
+  });
+});
+
+describe("sources the curator added himself", () => {
+  let outDir: string;
+  let storage: SqliteStorage;
+  beforeEach(() => { outDir = mkdtempSync(join(tmpdir(), "volta-run-cur-")); storage = new SqliteStorage(":memory:"); });
+  afterEach(() => { storage.close(); rmSync(outDir, { recursive: true, force: true }); });
+
+  const clock = () => resolveClock(["--now=2026-09-15T18:00:00Z"], {});
+  const EXTRA = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>Volta member raises a seed round - Entrevestor</title><link>https://entrevestor.test/a</link><guid>ea</guid><pubDate>Mon, 14 Sep 2026 09:00:00 GMT</pubDate><description>A Volta member closed a seed round this week. The company is based in Halifax.</description></item>
+</channel></rss>`;
+  const withExtra = async (url: string) => (url === "https://entrevestor.test/feed" ? EXTRA : fetchText(url));
+  const row = (o: Record<string, unknown> = {}) => ({
+    id: "cur_entrevestor", kind: "rss", type: "news", url: "https://entrevestor.test/feed", terms: [], channel_id: "",
+    fallback_link: "", keywords: [], filtered: false, label: "Entrevestor", enabled: true, ...o,
+  });
+
+  it("are fetched with the maintainer's, and their items reach the draft", async () => {
+    storage.addCuratorSource(row());
+    const s = await runWeek({ config, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: withExtra });
+
+    expect(s.sources.map((x) => `${x.id}:${x.status}`)).toContain("cur_entrevestor:ok");
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+    expect(readFileSync(s.drafts[0]!.file_md, "utf8")).toContain("Volta member raises a seed round");
+  });
+
+  it("are left out when turned off, and the rest of the run is unchanged", async () => {
+    storage.addCuratorSource(row({ enabled: false }));
+    const s = await runWeek({ config, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: withExtra });
+    expect(s.sources.map((x) => x.id)).not.toContain("cur_entrevestor");
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+  });
+
+  it("never stop the newsletter: a Slack channel that cannot be read is reported, and the draft is still built", async () => {
+    // Bader added the channel but the token was never set up, or the bot was never invited.
+    storage.addCuratorSource(row({ id: "cur_member-updates", kind: "slack_channel", type: "member_social", url: "", channel_id: "C0C2H7WAUJX" }));
+    const alerter = new MemoryAlerter();
+    const s = await runWeek({ config, clock: clock(), storage, alerter, outDir, fetchText: withExtra, env: {} });
+
+    const slack = s.sources.find((x) => x.id === "cur_member-updates")!;
+    expect(slack.status).toBe("failed");
+    expect(slack.error).toContain("SLACK_BOT_TOKEN is not set");
+    expect(alerter.sent.some((a) => a.source === "cur_member-updates" && a.level === "error")).toBe(true);
+    // The month still has its other sources, and a verified draft.
+    expect(s.sources.filter((x) => x.status === "ok").length).toBeGreaterThan(0);
+    expect(s.drafts.length).toBeGreaterThan(0);
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+  });
+});
+
+describe("a curator source's own keywords", () => {
+  let outDir: string;
+  let storage: SqliteStorage;
+  beforeEach(() => { outDir = mkdtempSync(join(tmpdir(), "volta-run-kw-")); storage = new SqliteStorage(":memory:"); });
+  afterEach(() => { storage.close(); rmSync(outDir, { recursive: true, force: true }); });
+
+  const clock = () => resolveClock(["--now=2026-09-15T18:00:00Z"], {});
+  // A partner's calendar: one event about the sector, one about a parking meeting.
+  const PARTNER = ["BEGIN:VCALENDAR", "VERSION:2.0",
+    "BEGIN:VEVENT", "UID:ocean", "SUMMARY:Ocean tech demo night", "DTSTART:20260922T220000Z", "DTEND:20260923T000000Z", "URL:https://partner.test/e/ocean", "DESCRIPTION:An evening of ocean technology demos.", "END:VEVENT",
+    "BEGIN:VEVENT", "UID:parking", "SUMMARY:Parking committee meeting", "DTSTART:20260923T150000Z", "DTEND:20260923T160000Z", "URL:https://partner.test/e/parking", "DESCRIPTION:Monthly parking committee.", "END:VEVENT",
+    "END:VCALENDAR"].join("\r\n");
+  const withPartner = async (url: string) => (url === "https://partner.test/ics" ? PARTNER : fetchText(url));
+  const calendar = (o: Record<string, unknown> = {}) => ({
+    id: "cur_partner", kind: "ics", type: "event", url: "https://partner.test/ics", terms: [], channel_id: "",
+    fallback_link: "https://partner.test/events", keywords: [], filtered: false, label: "Partner calendar", enabled: true, ...o,
+  });
+
+  it("filters a calendar, which the newsletter never filtered before, and says how many went", async () => {
+    storage.addCuratorSource(calendar({ keywords: ["ocean"], filtered: true }));
+    const s = await runWeek({ config, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: withPartner });
+
+    const partner = s.sources.find((x) => x.id === "cur_partner")!;
+    expect(partner.status).toBe("ok");
+    expect(partner.items).toBe(1);
+    expect(partner.warnings.join("\n")).toContain("1 item(s) dropped as off-topic for this source");
+    const md = readFileSync(s.drafts[0]!.file_md, "utf8");
+    expect(md).toContain("Ocean tech demo night");
+    expect(md).not.toContain("Parking committee meeting");
+  });
+
+  it("keeps everything from a calendar he added with no keywords, watchlist or not", async () => {
+    storage.addCuratorSource(calendar({ keywords: [], filtered: true }));
+    const s = await runWeek({ config, clock: clock(), storage, alerter: new MemoryAlerter(), outDir, fetchText: withPartner });
+    expect(s.sources.find((x) => x.id === "cur_partner")!.items).toBe(2);
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+  });
+});
+
+/**
+ * The guarantee Bader depends on: whatever one source does, the newsletter is still prepared and
+ * the draft still verifies. One case per kind, since each fails in its own way.
+ */
+describe("no single source can stop the newsletter", () => {
+  let outDir: string;
+  let storage: SqliteStorage;
+  beforeEach(() => { outDir = mkdtempSync(join(tmpdir(), "volta-run-fail-")); storage = new SqliteStorage(":memory:"); });
+  afterEach(() => { storage.close(); rmSync(outDir, { recursive: true, force: true }); });
+
+  const clock = () => resolveClock(["--now=2026-09-15T18:00:00Z"], {});
+  const WORKING = ["BEGIN:VCALENDAR", "VERSION:2.0",
+    "BEGIN:VEVENT", "UID:mixer", "SUMMARY:Volta Fall Mixer", "DTSTART:20260924T210000Z", "DTEND:20260924T230000Z", "URL:https://www.eventbrite.ca/e/mixer", "DESCRIPTION:Meet the fall cohort at Volta.", "END:VEVENT",
+    "END:VCALENDAR"].join("\r\n");
+
+  /** One source that works, so there is always something to build from, plus the broken one. */
+  const configWith = (broken: Record<string, unknown>): Config => ({
+    ...config,
+    sources: [{ id: "good-calendar", kind: "ics", type: "event", url: "https://good.test/ics", enabled: true, fallback_link: "https://voltaeffect.com/events" }, broken as never],
+  });
+  const bodies = async (url: string) => {
+    if (url === "https://good.test/ics") return WORKING;
+    throw new Error(`GET ${url} returned HTTP 503`);
+  };
+
+  const cases: Array<{ what: string; source: Record<string, unknown>; expect: RegExp }> = [
+    { what: "a news feed that is down", source: { id: "news", kind: "rss", type: "news", url: "https://dead.test/rss", enabled: true }, expect: /503/ },
+    { what: "a news search that is down", source: { id: "search", kind: "google_news", type: "news", url: "https://news.google.test/rss/search?q=x", enabled: true, terms: ["Volta"] }, expect: /503/ },
+    { what: "a calendar that is down", source: { id: "cal", kind: "ics", type: "event", url: "https://dead.test/ics", enabled: true, fallback_link: "https://voltaeffect.com/events" }, expect: /503/ },
+    { what: "a LinkedIn page that is down", source: { id: "li", kind: "linkedin_company", type: "linkedin", url: "https://dead.test/company", enabled: true }, expect: /503/ },
+    { what: "a Slack channel with no token", source: { id: "slack", kind: "slack_channel", type: "member_social", url: "", enabled: true, channel_id: "C0C2H7WAUJX" }, expect: /SLACK_BOT_TOKEN is not set/ },
+    { what: "a manual source misconfigured", source: { id: "manual", kind: "manual", type: "event", url: "", enabled: true, fallback_link: "" }, expect: /fallback_link/ },
+    { what: "a kind nothing can read", source: { id: "future", kind: "carrier_pigeon", type: "news", url: "https://x.test", enabled: true }, expect: /fetcher not built/ },
+  ];
+
+  for (const c of cases) {
+    it(`carries on with ${c.what}`, async () => {
+      const alerter = new MemoryAlerter();
+      const s = await runWeek({ config: configWith(c.source), clock: clock(), storage, alerter, outDir, fetchText: bodies, env: {} });
+
+      const bad = s.sources.find((x) => x.id === c.source.id)!;
+      expect(["failed", "skipped", "empty"]).toContain(bad.status);
+      expect(`${bad.error ?? ""} ${bad.warnings.join(" ")}`).toMatch(c.expect);
+      // Bader is told, and still gets a newsletter.
+      expect(alerter.sent.some((a) => a.source === c.source.id)).toBe(true);
+      expect(s.sources.find((x) => x.id === "good-calendar")!.status).toBe("ok");
+      expect(s.drafts.length).toBeGreaterThan(0);
+      expect(s.drafts.every((d) => d.verified)).toBe(true);
+      expect(readFileSync(s.drafts[0]!.file_md, "utf8")).toContain("Volta Fall Mixer");
+    });
+  }
+
+  it("carries on when a reader itself breaks, rather than losing the whole run", async () => {
+    // A bug inside a fetcher, not a source that is merely down: before this, it took the month with it.
+    const alerter = new MemoryAlerter();
+    const s = await runWeek({
+      config: configWith({ id: "breaks", kind: "rss", type: "news", url: "https://boom.test/rss", enabled: true }),
+      clock: clock(), storage, alerter, outDir, env: {},
+      fetchText: async (url) => { if (url === "https://boom.test/rss") throw Object.assign(new Error("boom"), { name: "TypeError" }); return bodies(url); },
+    });
+    const bad = s.sources.find((x) => x.id === "breaks")!;
+    expect(bad.status).toBe("failed");
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+  });
+
+  it("still builds a newsletter when every source fails, and says there is nothing rather than inventing any", async () => {
+    const alerter = new MemoryAlerter();
+    const s = await runWeek({
+      config: { ...config, sources: [{ id: "news", kind: "rss", type: "news", url: "https://dead.test/rss", enabled: true }] },
+      clock: clock(), storage, alerter, outDir, fetchText: bodies, env: {},
+    });
+    expect(s.sources.every((x) => x.status === "failed")).toBe(true);
+    expect(s.candidates).toHaveLength(0);
+    expect(s.drafts.length).toBeGreaterThan(0);
+    expect(s.drafts.every((d) => d.verified)).toBe(true);
+    // It says each section is empty in plain words, rather than inventing anything to fill them.
+    const md = readFileSync(s.drafts[0]!.file_md, "utf8");
+    expect(md).toContain("No upcoming events this week.");
+    expect(md).toContain("No news to report this week.");
   });
 });

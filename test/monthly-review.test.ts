@@ -87,7 +87,7 @@ describe("the monthly newsletter's wording", () => {
   it("says this month, never this week, and still verifies", () => {
     for (const d of buildDrafts([story], { timeZone: TZ, cadence: "monthly" })) {
       expect(d.subject, d.id).toBe("Volta this month: Volta launches a program");
-      expect(d.markdown, d.id).toContain("No upcoming events items this month.");
+      expect(d.markdown, d.id).toContain("No upcoming events this month.");
       expect(d.markdown, d.id).not.toMatch(/this week/i);
       expect(d.verification.ok, d.id).toBe(true);
     }
@@ -96,7 +96,7 @@ describe("the monthly newsletter's wording", () => {
   it("stays weekly when no cadence is given", () => {
     const d = buildDrafts([story], { timeZone: TZ, layouts: ["events-first"] })[0]!;
     expect(d.subject).toBe("Volta this week: Volta launches a program");
-    expect(d.markdown).toContain("No upcoming events items this week.");
+    expect(d.markdown).toContain("No upcoming events this week.");
   });
 });
 

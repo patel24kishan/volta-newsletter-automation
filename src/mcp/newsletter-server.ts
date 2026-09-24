@@ -15,10 +15,14 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { describeSources, effectiveSources, toSourceConfig } from "../sources/curator-sources.js";
+import { ADDABLE_KINDS, configKeeps, credentialNote, filterTerms, filterWords, KIND_LABEL, readsWhat, sourceFromFields, sourceLine } from "./source-tools.js";
+import { droppedCount, explainSourceNote, formatSourceNote, parseSourceNote, sourceLink, worthSaying, type SourceNote } from "../sources/source-notes.js";
 import type { Alerter } from "../alerts.js";
 import { partsInZone } from "../clock.js";
 import type { Clock } from "../clock.js";
-import { cadenceOf, type Config } from "../config.js";
+import { cadenceOf, type Config, type SourceConfig } from "../config.js";
+import { fetcherFor } from "../fetchers/index.js";
 import type { RankedItem } from "../pipeline/rank.js";
 import type { Publisher } from "../publish/types.js";
 import { EDIT_FIELD_LABEL, EDIT_FIELDS, type EditField } from "../review/edits.js";
@@ -57,8 +61,18 @@ Rules you must follow:
 - Keep "MARKED FOR REVIEW" and "On hold:" exactly as returned, so a held item is seen before it is ticked. Show a draft's notes to Bader as returned too.
 - Show a built draft's text exactly as returned, and give him the preview link. Do not summarise the draft in place of showing it.
 - Ask Bader before approve_draft and before send_campaign. Sending cannot be undone.
+- For add_source, use only what Bader gives you: an address, search words, or a Slack channel link. A source is somewhere to read from and a filter, never copy; never invent a feed and never add one he did not name.
+- When a source could not be read, tell him what it needs (a token, an invite to the channel, a sign-in) and never let its empty section pass as "nothing happened this month".
 
-Usual order: newsletter_status, then prepare_month if the month is not prepared, then list_candidates, set_selection, edit_item / add_event as he asks, build_draft (repeat after any change), approve_draft, send_campaign.`;
+Usual order: newsletter_status, then prepare_month if the month is not prepared, then list_candidates, set_selection, edit_item / add_event as he asks, build_draft (repeat after any change), approve_draft, send_campaign.
+
+Sources: Bader says these in a few words. Take them as they are, and ask only for what is missing.
+- "sources", "list sources", "what do we read?" -> list_sources.
+- "add source", "add feed", "add calendar", "add channel", or a link on its own -> add_source. Ask for the address, the search words, or the channel link, whichever the kind needs.
+- "turn off X", "pause X", "turn on X" -> set_source. "only keep X from that", "change the keywords" -> set_source with keywords.
+- "remove source", "delete source", "stop reading X" -> remove_source, after he has said to.
+- "refresh", "refresh this month", "fetch again" -> prepare_month with force.
+A source added now is read when the period is next prepared: say so, and offer to refresh when he wants its items straight away.`;
 
 export interface NewsletterDeps {
   config: Config;
@@ -69,6 +83,8 @@ export interface NewsletterDeps {
   env: NodeJS.ProcessEnv;
   /** Fetches every source for the period and ranks the candidates. Injected so tests need no network. */
   runPeriod: () => Promise<RunSummary>;
+  /** How a single source is read when add_source checks it. Injected so tests need no network. */
+  fetchText?: (url: string) => Promise<string>;
   publisher?: Publisher;
   /** The audience the platform will send to, read once at startup, for the approval message. */
   audience?: { audienceName: string; memberCount: number };
@@ -98,7 +114,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       ...(d.publisher ? { publisher: d.publisher } : {}),
       ...(d.audience ? { audience: d.audience } : {}),
     };
-    const manual = d.config.sources.find((s) => s.kind === "manual" && s.enabled);
+    const manual = effectiveSources(d.config, d.storage).find((s) => s.kind === "manual" && s.enabled);
     if (manual?.fallback_link) st.manualSource = { ...manual, fallback_link: manual.fallback_link };
     loadCampaigns(st, d.storage);
     const saved = loadReview(d.storage, key);
@@ -130,10 +146,88 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     startReview(st, {
       candidates: run.candidates, preselectedIds: prepared(st) ? ticked.filter((id) => run.candidates.some((c) => c.item.id === id)) : run.preselected_ids,
       firstWorkday: run.first_workday, period: run.period, timeZone: tz, clockLabel: d.clock.label,
-      sourceNotes: run.sources.filter((s) => s.status !== "ok").map((s) => `${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`),
+      // Every source, warnings included: a later surface cannot tell a quiet month from a month
+      // whose items were all thrown away unless the numbers travel with the note.
+      sourceNotes: run.sources
+        .filter((s) => s.status !== "ok" || (s.warnings ?? []).some(worthSaying))
+        .map((s) => formatSourceNote({ id: s.id, status: s.status, ...(s.error ? { error: s.error } : {}), warnings: s.warnings ?? [] })),
     }, CLAUDE_CHANNEL);
     return run;
   }
+
+  /**
+   * Everything about a source Bader should know, by source id: the name he gave it, what kind it
+   * is, what it keeps, and where to go. One map, so every surface says the same thing about the
+   * same source instead of each building its own half of the sentence.
+   */
+  function sourceFacts(): Record<string, { name: string; kind: string; keeps: string; keepsWords: string; link?: string }> {
+    const facts: Record<string, { name: string; kind: string; keeps: string; keepsWords: string; link?: string }> = {};
+    const mine = new Map(d.storage.listCuratorSources().map((r) => [r.id, r]));
+    for (const src of describeSources(d.config, d.storage).sources) {
+      const row = mine.get(src.id);
+      const link = sourceLink(src);
+      facts[src.id] = {
+        name: row?.label || src.id,
+        kind: src.kind,
+        keeps: row ? filterWords(row, d.config, src.kind) : configKeeps(src.kind, d.config),
+        keepsWords: filterTerms(row ?? { keywords: [], filtered: false }, d.config, src.kind),
+        ...(link ? { link } : {}),
+      };
+    }
+    return facts;
+  }
+
+  /** Where Bader goes for each source, by id. */
+  function linksBySource(): Record<string, string> {
+    const links: Record<string, string> = {};
+    for (const [id, f] of Object.entries(sourceFacts())) if (f.link) links[id] = f.link;
+    return links;
+  }
+
+  /**
+   * What to tell Bader about the sources, from notes in either shape: a run's rows, or the
+   * "id: status (error)" strings a saved review kept. Failures carry their remedy; a source that
+   * answered but gave unusable items is called out too, since that is how empty entries reach an email.
+   */
+  function attentionLines(notes: Array<SourceNote>): string[] {
+    const facts = sourceFacts();
+    const lines: string[] = [];
+    for (const n of notes) {
+      const f = facts[n.id];
+      // The manual source is where Bader's own events live: "found nothing" every quiet month is noise.
+      if (f?.kind === "manual" && n.status === "empty") continue;
+      const o = { periodWord, ...(f ? { name: f.name, kind: f.kind, keeps: f.keeps, keepsWords: f.keepsWords, ...(f.link ? { link: f.link } : {}) } : {}) };
+      const said = (n.warnings ?? []).filter(worthSaying);
+      if (n.status !== "ok") {
+        lines.push(`- ${explainSourceNote(n, o)}`);
+        // The explanation already carried the count; repeating the raw warning says it twice.
+        continue;
+      }
+      // It answered and gave items: only worth a line if what it gave is unusable.
+      for (const w of said) lines.push(`- ${o.name ?? n.id} answered, but ${plainWarning(w)}${f?.link ? ` (${f.link})` : ""}`);
+    }
+    return lines;
+  }
+
+  /** A run's own rows as notes, warnings included. */
+  const notesOf = (run: RunSummary): SourceNote[] =>
+    run.sources.map((s) => ({ id: s.id, status: s.status, ...(s.error ? { error: s.error } : {}), warnings: s.warnings ?? [] }));
+
+  /** Notes a saved review kept as strings ("volta-linkedin: failed (...)"). */
+  const savedNotes = (st: ReviewState): SourceNote[] => (st.reminder?.input.sourceNotes ?? []).map((n: string) => parseSourceNote(n));
+
+  /** A fetcher's warning as something Bader can read. */
+  function plainWarning(w: string): string {
+    if (/no JSON-LD|fell back/i.test(w)) return "it could only give the post titles, not what the posts say. The entries will look bare, so untick them unless you know what they are about.";
+    if (/markup may have changed/i.test(w)) return "nothing could be read from the page this time. Tell the maintainer if it keeps happening.";
+    if (/link\(s\) could not be fetched/i.test(w)) return "some items have no link back to their Slack message.";
+    if (/more messages in the window than could be read/i.test(w)) return "it had more messages than could be read in one go, so older ones this month may be missing.";
+    if (/may be missing/i.test(w)) return "its public page did not reach back far enough, so earlier posts this month may be missing.";
+    if (/were skipped/i.test(w)) return "some items had nothing to link to, so they were left out.";
+    if (/unknown TZID/i.test(w)) return "an event gave a timezone it does not recognise, so check that event's time.";
+    return w;
+  }
+
   const notPrepared = () => text(`This ${periodWord}'s newsletter has not been prepared yet. Call prepare_month first.`, true);
 
   server.registerTool("newsletter_status", {
@@ -160,14 +254,14 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("prepare_month", {
     title: `Prepare this ${periodWord}'s newsletter`,
-    description: `Fetch every source for this ${periodWord} and list the candidates. Does nothing if already prepared, unless force is true (which fetches again; Bader's edits and added events are kept).`,
+    description: `Fetch every source for this ${periodWord} and list the candidates. Does nothing if already prepared, unless force is true (which fetches again; Bader's edits and added events are kept). "Refresh" or "fetch again" means force.`,
     inputSchema: { force: z.boolean().optional().describe("Fetch again even though this period was already prepared.") },
   }, async ({ force }) => {
     const st = await current();
     if (prepared(st) && !force) return text(`Already prepared: ${st.candidates.length} candidates. Use list_candidates, or force: true to fetch again.`);
     const run = await prepareNow(st);
     const g = candidateGroups(st);
-    const notes = run.sources.filter((s) => s.status !== "ok").map((s) => `- ${s.id}: ${s.status}${s.error ? ` (${s.error})` : ""}`);
+    const notes = attentionLines(notesOf(run));
     return text([
       `Prepared the ${periodWord} of ${run.period}: ${run.candidates.length} candidates (${g.upcomingEvents.length} upcoming events, ${g.pastEvents.length} past events, ${g.other.length} news and updates), ${currentSelection(st).length} ticked.`,
       ...(notes.length ? ["Sources that need attention:", ...notes] : ["Every source answered."]),
@@ -212,7 +306,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         }
         const greeting = greetingText({
           ...facts, now, timeZone: tz, late: decision.reminder === "due-late",
-          groups: candidateGroups(st), ticked: currentSelection(st), sourceNotes: st.reminder?.input.sourceNotes ?? [],
+          groups: candidateGroups(st), ticked: currentSelection(st), sourceNotes: st.reminder?.input.sourceNotes ?? [], sourceLines: attentionLines(savedNotes(st)),
         });
         d.storage.completeMark(REMINDER_TASK, key, now.toISOString());
         return text(`GREETING\n${greeting}`);
@@ -319,7 +413,18 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     if (!prepared(st)) return notPrepared();
     await withPreview(st);
     const r = buildDraft(st, d.alerter);
-    if (!r.ok && r.reason === "nothing-selected") return text("Nothing is ticked. Tick at least one item with set_selection, then build again.", true);
+    if (!r.ok && r.reason === "nothing-selected") {
+      // Telling him to tick something is no help when nothing was found at all: say what happened.
+      if (st.candidates.length === 0) {
+        const notes = attentionLines(savedNotes(st));
+        return text([
+          `No candidates were found for this ${periodWord}, so there is nothing to build.`,
+          ...(notes.length ? ["Sources that need attention:", ...notes] : []),
+          `Nothing is sent, and nothing is invented. Prepare again with prepare_month force once the sources are working, or add an event with add_event.`,
+        ].join("\n"), true);
+      }
+      return text("Nothing is ticked. Tick at least one item with set_selection, then build again.", true);
+    }
     if (!r.ok) return text(`The draft did not pass verification, so it was not kept (the previous draft, if any, is still the one to approve):\n${r.violations.map((v) => `- ${v.kind}: ${v.value}`).join("\n")}`, true);
     const notes = draftNotesText(r.notes);
     const panel = { key: r.key, subject: r.draft.subject, previewUrl: r.previewUrl ?? null, notes };
@@ -383,6 +488,178 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       throw e;
     }
   });
+
+  // ---- Sources Bader manages himself (src/sources/curator-sources.ts holds the merge) ----
+
+  /**
+   * Read a source once, so Bader learns now whether it answers rather than a month later. What it
+   * returns is never stored, and the words are the same ones the other surfaces use for a failure.
+   */
+  async function checkSource(source: SourceConfig, about: { name: string; kind: string; keeps: string; keepsWords: string; link?: string }): Promise<{ ok: boolean; text: string; allDropped?: boolean }> {
+    const fetcher = fetcherFor(source.kind);
+    if (!fetcher) return { ok: false, text: `There is no reader for ${source.kind} yet, so it cannot be checked.` };
+    const say = (note: SourceNote) => explainSourceNote(note, { ...about, periodWord });
+    try {
+      const r = await fetcher.fetch(source, {
+        config: d.config, clock: d.clock, storage: d.storage, windows: windowsFor(d.clock.now(), d.config), env: d.env,
+        ...(d.fetchText ? { fetchText: d.fetchText } : {}),
+      });
+      if (r.error) return { ok: false, text: say({ id: source.id, status: "failed", error: r.error, warnings: r.warnings }) };
+      // "Nothing in the window" and "everything was filtered out" are different facts to him.
+      if (r.items.length === 0) {
+        const note: SourceNote = { id: source.id, status: "empty", warnings: r.warnings };
+        return { ok: true, text: say(note), allDropped: droppedCount(r.warnings) > 0 };
+      }
+      return { ok: true, text: `Read it: ${r.items.length} item(s) in this ${periodWord}'s window, for example "${r.items[0]!.title}".` };
+    } catch (e) {
+      return { ok: false, text: say({ id: source.id, status: "failed", error: (e as Error).message }) };
+    }
+  }
+
+  server.registerTool("list_sources", {
+    title: "List the sources",
+    description: `Everything read for the newsletter each ${periodWord}: what it reads, whether it is on, how it filters, and who set it up.`,
+    annotations: { readOnlyHint: true },
+  }, async () => {
+    const st = await current();
+    const all = describeSources(d.config, d.storage);
+    const mine = new Map(d.storage.listCuratorSources().map((r) => [r.id, r]));
+    const notes = new Map<string, string>((st.reminder?.input.sourceNotes ?? []).map((n: string) => [n.slice(0, n.indexOf(":")), n.slice(n.indexOf(":") + 2)]));
+    const links = linksBySource();
+    const lineFor = (s: SourceConfig) => sourceLine({
+      source: s, config: d.config,
+      ...(mine.get(s.id) ? { mine: mine.get(s.id)! } : {}),
+      ...(notes.get(s.id) ? { lastRun: notes.get(s.id)! } : {}),
+      ...(links[s.id] ? { link: links[s.id]! } : {}),
+    });
+    const lines = all.sources.map(lineFor);
+    // One he turned off is still his, so it is listed rather than quietly disappearing.
+    for (const r of mine.values()) {
+      if (!all.sources.some((s) => s.id === r.id) && !all.broken.some((b) => b.id === r.id)) {
+        const off = sourceLink({ kind: r.kind, url: r.url, channel_id: r.channel_id, fallback_link: r.fallback_link } as unknown as SourceConfig);
+        lines.push(sourceLine({ source: { id: r.id, kind: r.kind, enabled: r.enabled } as unknown as SourceConfig, mine: r, config: d.config, ...(off ? { link: off } : {}) }));
+      }
+    }
+    return text([
+      `${lines.length} source(s) for this ${periodWord}:`,
+      ...lines,
+      ...(all.broken.length ? ["", "These cannot be read as they are, and are skipped:", ...all.broken.map((b) => `- ${b.id}: ${b.errors.join("; ")}`)] : []),
+      ...(all.shadowed.length ? ["", `Already set up by the maintainer, so yours is ignored: ${all.shadowed.join(", ")}`] : []),
+    ].join("\n"));
+  });
+
+  server.registerTool("add_source", {
+    title: "Add a source",
+    description: "Add somewhere the newsletter reads items from. Use only what Bader gives you: an address, search words, or a Slack channel link. Never invent a source, and never add one he did not name.",
+    inputSchema: {
+      kind: z.enum(ADDABLE_KINDS).describe("What he is adding: rss for a feed, google_news for a news search, ics for a calendar, linkedin_company for a company page, slack_channel for a Slack channel."),
+      url: z.string().optional().describe("The full https:// address of the feed, calendar or page. Leave it out for a news search."),
+      terms: z.array(z.string()).optional().describe("For a news search only: the words to search for, in Bader's own words, such as Volta Halifax."),
+      channel_id: z.string().optional().describe("For a Slack channel: the link from Copy link, or the id such as C0123ABCD from the channel's About tab."),
+      keywords: z.array(z.string()).optional().describe("Keep only items from this source mentioning one of these words. Leave it out to use the newsletter's watchlist, or give an empty list to keep everything it publishes."),
+      name: z.string().optional().describe("A short name for the source list, in Bader's words. It is never printed in the newsletter."),
+      content: z.enum(["news", "events"]).optional().describe("Whether a feed lists news or events. A calendar is events already."),
+      check: z.boolean().optional().describe("Read the source once now to see whether it answers. True unless Bader says not to."),
+      refresh: z.boolean().optional().describe("Fetch every source again straight away, so this one's items appear in the list now."),
+    },
+  }, async (f) => {
+    const taken = describeSources(d.config, d.storage).sources.map((s) => s.id);
+    const made = sourceFromFields({
+      kind: f.kind,
+      ...(f.url ? { url: f.url } : {}), ...(f.terms ? { terms: f.terms } : {}), ...(f.channel_id ? { channel_id: f.channel_id } : {}),
+      ...(f.keywords ? { keywords: f.keywords } : {}), ...(f.name ? { name: f.name } : {}), ...(f.content ? { content: f.content } : {}),
+    }, taken);
+    if ("errors" in made) return text(`Not added:\n${made.errors.map((e) => `- ${e}`).join("\n")}`, true);
+
+    const asSource = toSourceConfig({ ...made.row, added_at: d.clock.now().toISOString() });
+    if ("errors" in asSource) return text(`Not added:\n${asSource.errors.map((e) => `- ${e}`).join("\n")}`, true);
+
+    // A Slack channel with no token is kept but left off, so it can never look as if it were working.
+    const blocked = made.row.kind === "slack_channel" && !d.env.SLACK_BOT_TOKEN;
+    const row = d.storage.addCuratorSource({ ...made.row, enabled: !blocked, added_at: d.clock.now().toISOString() });
+    const note = credentialNote(row.kind, d.env);
+
+    const keeps = filterWords(row, d.config, row.kind);
+    const lines = [`Added ${KIND_LABEL[f.kind]}: ${row.label || row.id} reads ${readsWhat(row)}, and keeps ${keeps}.`];
+    if (note) lines.push(note);
+    // Whether it can be read at all decides the last line: promising it will be read while it sits
+    // switched off, or right after the check failed, is the kind of thing that costs trust.
+    const link = sourceLink(asSource.source);
+    const checked = f.check !== false && !blocked
+      ? await checkSource(asSource.source, { name: row.label || row.id, kind: row.kind, keeps, keepsWords: filterTerms(row, d.config, row.kind), ...(link ? { link } : {}) })
+      : undefined;
+    if (checked) lines.push(checked.text);
+    if (blocked) {
+      lines.push("I have added it but left it switched off, so nothing looks broken while it waits. Once that is done, say: turn it back on.");
+    } else if (checked?.allDropped) {
+      lines.push(`Fetching again now would drop them again. Say: keep everything from ${row.label || row.id}, then: refresh this ${periodWord}.`);
+    } else if (checked && !checked.ok) {
+      lines.push("I have kept it, in case the address is right and the trouble is temporary. Say: turn it off, if you would rather it stopped being tried.");
+    } else if (f.refresh) {
+      const st = await current();
+      const run = await prepareNow(st);
+      const got = run.sources.find((s) => s.id === row.id);
+      lines.push(`Fetched everything again: ${run.candidates.length} candidates, and this source ${got ? `${got.status}${got.items ? ` with ${got.items} item(s)` : ""}` : "was not read"}.`);
+    } else {
+      lines.push(`It will be read when this ${periodWord} is next prepared. To see its items now, say: refresh this ${periodWord}.`);
+    }
+    lines.push(`Its id is ${row.id}.`);
+    return text(lines.join("\n"));
+  });
+
+  server.registerTool("set_source", {
+    title: "Turn a source on or off, or change its keywords",
+    description: "Stop or start reading one of Bader's own sources, or replace the words it keeps items by. The maintainer's sources cannot be changed here.",
+    inputSchema: {
+      source_id: z.string().describe("The source's id, as list_sources shows it."),
+      enabled: z.boolean().optional().describe("False stops reading it without losing it; true starts again."),
+      keywords: z.array(z.string()).optional().describe("Replace the words it keeps items by. An empty list keeps everything it publishes."),
+    },
+  }, async ({ source_id, enabled, keywords }) => {
+    const mine = d.storage.listCuratorSources().find((r) => r.id === source_id);
+    if (!mine) return text(notHis(source_id, "change"), true);
+    if (enabled === undefined && keywords === undefined) return text("Nothing to change: give enabled, keywords, or both.", true);
+    if (keywords !== undefined) {
+      // The row is replaced rather than patched, so its id, and every edit keyed by it, stay as they are.
+      d.storage.removeCuratorSource(mine.id);
+      d.storage.addCuratorSource({ ...mine, keywords, filtered: true, ...(enabled === undefined ? {} : { enabled }) });
+    } else if (enabled !== undefined) {
+      d.storage.setCuratorSourceEnabled(mine.id, enabled, d.clock.now().toISOString());
+    }
+    const now = d.storage.listCuratorSources().find((r) => r.id === source_id)!;
+    const note = now.enabled ? credentialNote(now.kind, d.env) : undefined;
+    return text([
+      `${now.label || now.id} is now ${now.enabled ? "on" : "off"}, and keeps ${filterWords(now, d.config, now.kind)}.`,
+      ...(note ? [note] : []),
+      `It takes effect when this ${periodWord} is next prepared.`,
+    ].join("\n"));
+  });
+
+  server.registerTool("remove_source", {
+    title: "Remove a source",
+    description: "Forget one of Bader's own sources. Items already fetched from it stay in this period's list, and anything already sent is untouched. Ask him first.",
+    inputSchema: {
+      source_id: z.string().describe("The source's id, as list_sources shows it."),
+      confirm: z.boolean().describe("true only when Bader has said to remove it."),
+    },
+    annotations: { destructiveHint: true },
+  }, async ({ source_id, confirm }) => {
+    if (!confirm) return text("Not removed: confirm must be true, and only once Bader has said to remove it.", true);
+    const mine = d.storage.listCuratorSources().find((r) => r.id === source_id);
+    if (!mine) return text(notHis(source_id, "remove"), true);
+    d.storage.removeCuratorSource(source_id);
+    return text([
+      `Removed ${mine.label || mine.id}. It will not be read again.`,
+      `Items already fetched from it stay in this ${periodWord}'s list until it is prepared again, and anything already sent is untouched.`,
+    ].join("\n"));
+  });
+
+  /** Why a source id cannot be changed here: it is the maintainer's, or there is no such source. */
+  function notHis(id: string, verb: string): string {
+    const theirs = d.config.sources.find((s) => s.id === id);
+    if (theirs) return `${id} is set up by the maintainer in the config file; ask them to ${verb} it.`;
+    return `There is no source called ${id}. Use list_sources to see them.`;
+  }
 
   return server;
 }

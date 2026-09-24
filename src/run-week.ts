@@ -12,6 +12,8 @@ import { localDateString, type Clock } from "./clock.js";
 import { cadenceOf, type Cadence, type Config } from "./config.js";
 import { buildDrafts, type Draft } from "./draft/templates.js";
 import { fetcherFor } from "./fetchers/index.js";
+import { effectiveSources } from "./sources/curator-sources.js";
+import { keepRelevant } from "./sources/relevance.js";
 import type { FetchContext } from "./fetchers/types.js";
 import { dedupeItems } from "./pipeline/dedupe.js";
 import { rankItems, type RankedItem } from "./pipeline/rank.js";
@@ -65,7 +67,8 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   // 1. Fetch (in parallel; each source reports independently). The windows are worked out once,
   //    so every source reads the same span of time.
   const windows = windowsFor(now, config);
-  const enabled = config.sources.filter((s) => s.enabled);
+  // Config sources plus any the curator added himself (src/sources/curator-sources.ts).
+  const enabled = effectiveSources(config, storage).filter((s) => s.enabled);
   const results = await Promise.all(
     enabled.map(async (s) => {
       const f = fetcherFor(s.kind);
@@ -76,7 +79,13 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
         ...(o.slackApi ? { slackApi: o.slackApi } : {}),
         ...(o.env ? { env: o.env } : {}),
       };
-      return { s, r: await f.fetch(s, ctx) };
+      try {
+        return { s, r: await f.fetch(s, ctx) };
+      } catch (e) {
+        // A fetcher is meant to report its own failures, but a bug in one must never cost the
+        // whole newsletter: it is turned into the same "failed" note any other bad source gets.
+        return { s, r: { source: s.id, items: [], warnings: [], error: `the reader for this source broke: ${(e as Error).message}`, bytes: 0 } };
+      }
     }),
   );
 
@@ -93,13 +102,17 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
       alerter.alert("error", s.id, r.error, "check the source URL and network; the draft will say this source had no items");
       continue;
     }
-    if (r.items.length === 0) {
-      sources.push({ id: s.id, status: "empty", items: 0, warnings: r.warnings });
+    // A source the curator added can carry its own keywords. The news fetcher already applies them
+    // as it reads; this catches the kinds that never had a filter at all (calendar, LinkedIn, Slack).
+    const relevant = keepRelevant(s, config, r.items);
+    const warnings = relevant.dropped ? [...r.warnings, `${relevant.dropped} item(s) dropped as off-topic for this source`] : r.warnings;
+    if (relevant.items.length === 0) {
+      sources.push({ id: s.id, status: "empty", items: 0, warnings });
       alerter.alert("warning", s.id, "returned zero items in the window", "normal if quiet; verify the source manually if unexpected");
       continue;
     }
-    sources.push({ id: s.id, status: "ok", items: r.items.length, warnings: r.warnings });
-    fetched.push(...r.items);
+    sources.push({ id: s.id, status: "ok", items: relevant.items.length, warnings });
+    fetched.push(...relevant.items);
   }
 
   // 2. Store, dedupe, summarize, rank
