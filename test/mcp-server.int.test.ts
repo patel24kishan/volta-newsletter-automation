@@ -158,6 +158,32 @@ describe("the newsletter tools, as Claude uses them", () => {
    * asking. A tick sent from that view as "the selection is now exactly these" unticked everything
    * off screen: three ticked items became one, silently, with the pre-ticked list unrecoverable.
    */
+  /**
+   * `select` replaces the whole selection, so a list built from part of the month drops everything
+   * it leaves out. That is how an event the curator had just added left his newsletter: the reply
+   * said "16 ticked", which was true, and said nothing about the one that had gone.
+   */
+  it("says what came off the list, not only what is still on it", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+    const list = (await c.call("list_candidates")).text;
+    const mixer = idOf(list, "Fall Mixer");
+    const cohort = idOf(list, "Volta opens applications for its fall cohort");
+
+    await c.call("set_selection", { select: [mixer, cohort] });
+    // A replacement that leaves one out: the loss has to be said, not left to be noticed.
+    const narrowed = await c.call("set_selection", { select: [mixer] });
+    expect(narrowed.text).toContain("1 ticked: Fall Mixer");
+    expect(narrowed.text).toContain("No longer ticked: Volta opens applications for its fall cohort");
+    expect(narrowed.text).toContain("Say so if any of those should stay in");
+
+    // Unticking on purpose says the same thing; there is nothing to hide either way.
+    expect((await c.call("set_selection", { untick: [mixer] })).text).toContain("No longer ticked: Fall Mixer");
+    // And a change that removes nothing does not invent a line about it.
+    expect((await c.call("set_selection", { tick: [cohort] })).text).not.toContain("No longer ticked");
+    await c.close();
+  });
+
   it("keeps the items it is not showing when a box is ticked in a narrowed panel", async () => {
     const c = await connect();
     await c.call("prepare_month");

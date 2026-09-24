@@ -9,12 +9,31 @@ const root = document.getElementById("root");
 let state = null;
 let draft = null;
 
-// Registered before connecting: the host may send the list's result straight after the handshake.
+/**
+ * Whether the panel is already checking with the server, so confirming a result cannot set off
+ * another confirmation and loop.
+ */
+let confirming = false;
+
+/**
+ * Draw what the host hands over, then check it.
+ *
+ * The panel has no state of its own: for a long time its only source was this callback, and it
+ * believed whatever it was given. What the host gives it can be a result from earlier in the chat,
+ * whose ticks are no longer the ones the server holds — the curator approved a draft, asked for the
+ * candidates again, and was shown the selection he had started the month with. The danger is not
+ * the display: it is that his next click is computed against a picture that is out of date.
+ *
+ * So a handed result is treated as a first sketch, drawn at once so the panel is never blank, and
+ * then confirmed against the server. Whichever group the sketch was narrowed to is kept.
+ */
 app.ontoolresult = (r) => {
-  if (r.structuredContent && r.structuredContent.groups) {
-    state = r.structuredContent;
-    render();
-  }
+  if (!(r.structuredContent && r.structuredContent.groups)) return;
+  state = r.structuredContent;
+  render();
+  if (confirming) return;
+  confirming = true;
+  refresh().finally(() => { confirming = false; });
 };
 app.onhostcontextchanged = (ctx) => applyContext(ctx);
 
@@ -337,3 +356,13 @@ function buildBar() {
 
 await app.connect();
 applyContext(app.getHostContext());
+
+// And asked for, rather than only waited for. A panel the host mounts without handing it a result
+// would otherwise sit on "Loading the candidates…" for good; one handed a stale result is corrected
+// by the confirmation above. Either way the panel ends up showing what the server actually holds.
+if (!state) {
+  confirming = true;
+  await refresh().finally(() => { confirming = false; });
+  // Never leave the loading line standing when there was a reason it could not be read.
+  if (!state) root.replaceChildren(el("p", { class: "muted" }, status.message || "The candidates could not be read. Ask for this month's newsletter in the chat."));
+}

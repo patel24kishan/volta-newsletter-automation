@@ -382,16 +382,23 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   }, async ({ select, tick, untick }) => {
     const st = await current();
     if (!prepared(st)) return notPrepared();
-    let ids = select ?? currentSelection(st);
+    const before = currentSelection(st);
+    let ids = select ?? before;
     if (tick) ids = [...ids, ...tick];
     if (untick) ids = ids.filter((id) => !untick.includes(id));
     const r = setSelection(st, ids);
+    // What came off, not only what is on. `select` replaces the whole selection, so a list built
+    // from part of the month — one group, or what a chat happened to be showing — drops everything
+    // it leaves out. An event Bader had just added went that way, and the reply at the time said
+    // only "16 ticked", which is true and tells him nothing about the one that went.
+    const removed = before.filter((id) => !r.selected.includes(id));
     // Through candidateGroups, which applies his edits, so an item he renamed is read back to him
     // under his own name rather than the one its source gave it.
     const g = candidateGroups(st);
     const titles = new Map([...g.upcomingEvents, ...g.pastEvents, ...g.other].map((c) => [c.item.id, c.item.title]));
     return text([
       `${r.selected.length} ticked: ${r.selected.map((id) => titles.get(id)).join("; ") || "nothing"}.`,
+      ...(removed.length ? [`No longer ticked: ${removed.map((id) => titles.get(id) ?? id).join("; ")}. Say so if any of those should stay in.`] : []),
       ...(r.unknown.length ? [`Not candidates, ignored: ${r.unknown.join(", ")}.`] : []),
       "Rebuild with build_draft to see the change.",
     ].join("\n"), r.unknown.length > 0 && r.selected.length === 0);

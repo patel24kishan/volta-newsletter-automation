@@ -188,3 +188,29 @@ describe("the state the panel is given", () => {
     expect({ ticked: p.ticked, total: p.total }).toEqual({ ticked: 2, total: 3 });
   });
 });
+
+describe("where the panel gets what it shows", () => {
+  /**
+   * For a long time the panel believed whatever the host handed it. What the host hands over can be
+   * a result from earlier in the chat: the curator approved a draft, asked for the candidates
+   * again, and was shown the selection he had begun the month with. The display is not the harm —
+   * his next click is computed against a picture that is out of date.
+   */
+  it("confirms a handed result against the server instead of trusting it", () => {
+    const html = panelHtml();
+    expect(html).toContain("app.ontoolresult = (r) => {");
+    // Drawn at once so the panel is never blank, then checked.
+    expect(html).toMatch(/state = r\.structuredContent;\n {2}render\(\);\n {2}if \(confirming\) return;/);
+    expect(html).toContain("confirming = true;");
+    // And the check cannot set off another check.
+    expect(html).toContain("refresh().finally(() => { confirming = false; });");
+  });
+
+  it("asks for itself when the host hands it nothing, rather than loading for ever", () => {
+    const html = panelHtml();
+    expect(html).toContain("if (!state) {");
+    expect(html).toContain("The candidates could not be read.");
+    // The loading line must not be left standing when there is a reason it could not be read.
+    expect(html).toContain("root.replaceChildren(el(\"p\", { class: \"muted\" }, status.message");
+  });
+});
