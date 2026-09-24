@@ -95,6 +95,11 @@ export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; k
   if (/ENOTFOUND|getaddrinfo|ERR_NAME_NOT_RESOLVED/i.test(err)) {
     return `Nothing answers at that address, so it is probably a typo. Check it against the site, ${say}`;
   }
+  // Reaches Bader now that the reason survives the fetch (src/http.ts). Waiting will not fix it,
+  // which is what the outage line below would have told him.
+  if (/CERT_|ERR_TLS|certificate|SELF_SIGNED/i.test(err)) {
+    return "That site's security certificate is not valid, so it cannot be read safely. Only the site's owner can fix it: leave the source off, or remove it if it stays broken.";
+  }
   if (/HTTP 5\d\d|fetch failed|timed out|ECONNREFUSED/i.test(err)) {
     return `The site did not answer. That is usually temporary, but check the address for a typo if it keeps failing. ${say[0]!.toUpperCase()}${say.slice(1)}`;
   }

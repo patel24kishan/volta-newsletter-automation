@@ -172,8 +172,12 @@ describe("nothing a developer wrote reaches Bader", () => {
     expect(said).toContain("Then say: refresh this month.");
   });
 
+  // The string is the one src/http.ts writes, not an approximation of it. It used to read
+  // "fetch failed ENOTFOUND nope.test", which no code produced: Node says only "fetch failed" and
+  // keeps the reason on `cause`, which was dropped. The branch passed its test and never once fired.
+  // test/http.test.ts now runs the real message through this matcher rather than trusting either.
   it("calls a dead address a typo rather than an outage", () => {
-    expect(remedyFor({ id: "s", status: "failed", error: "GET https://nope.test failed: fetch failed ENOTFOUND nope.test" }, { periodWord: "month" }))
+    expect(remedyFor({ id: "s", status: "failed", error: "GET https://nope.test failed: fetch failed (getaddrinfo ENOTFOUND nope.test)" }, { periodWord: "month" }))
       .toMatch(/probably a typo/);
   });
 });

@@ -8,6 +8,7 @@ import type { Config } from "../src/config.js";
 import { runWeek } from "../src/run-week.js";
 import { buildDraft, candidateGroups, currentSelection, editItem, setSelection, startReview, type ReviewState } from "../src/review/review.js";
 import { periodOf } from "../src/schedule/period.js";
+import { remedyFor } from "../src/sources/source-notes.js";
 import { SqliteStorage } from "../src/storage.js";
 import { loadReview, restoreSession } from "../src/surface/session.js";
 
@@ -83,6 +84,25 @@ describe("runWeek", () => {
     expect(s.first_workday).toMatchObject({ date: "2026-10-13", weekday: "tuesday" });
     expect(s.reminder_due).toBe(true);
     expect(alerter.sent.some((a) => a.source === "schedule" && /config override/.test(a.message))).toBe(true);
+  });
+
+  /**
+   * The real HTTP path, not the injected one: no fetchText hook, and an address nothing listens on,
+   * so Node makes a genuine failure without touching the network. What the run records has to carry
+   * the reason, because that string is the whole of what Bader's advice is built from. It used to
+   * arrive as the bare words "fetch failed", and a mistyped feed was then explained to him as a
+   * site having a bad day, every month, for as long as he kept the source.
+   */
+  it("carries why a source could not be read through the real network path", async () => {
+    const alerter = new MemoryAlerter();
+    const dead: Config = { ...config, sources: [{ id: "google-news", kind: "rss", type: "news", url: "http://127.0.0.1:45789/feed.xml", enabled: true }] };
+    const s = await runWeek({ config: dead, clock: resolveClock(["--now=2026-09-15T18:00:00Z"], {}), storage, alerter, outDir });
+    expect(s.sources[0]).toMatchObject({ id: "google-news", status: "failed" });
+    expect(s.sources[0]!.error).toContain("ECONNREFUSED");
+    expect(remedyFor({ id: "google-news", status: "failed", error: s.sources[0]!.error! }, { periodWord: "month" })).toMatch(/did not answer/);
+    // And the month still prepares: no source failing can stop the newsletter.
+    expect(existsSync(join(outDir, "run.json"))).toBe(true);
+    expect(alerter.sent.some((a) => a.level === "error")).toBe(true);
   });
 });
 
