@@ -30,6 +30,14 @@ export interface DraftOptions {
   layouts?: Draft["id"][];
   /** Says "this month" rather than "this week" when the newsletter is monthly. Weekly when absent. */
   cadence?: Cadence;
+  /** The period this newsletter covers, `YYYY-MM` when monthly. The subject names it. */
+  period?: string;
+  /**
+   * When the draft is being built. An event that started between the run and the build belongs in
+   * the look back, and without this the split falls back to the flag stored at fetch time, which
+   * would show it as still to come.
+   */
+  now?: Date;
   /**
    * Where an item's image is loaded from: its https link as it is, a local file as an inline
    * preview or, once approved, the email platform's hosted copy. Returning undefined leaves the
@@ -84,7 +92,7 @@ const P = {
   more: (n: number) => `and ${n} more`,
 };
 const CADENCES: Cadence[] = ["weekly", "monthly"];
-const cadence = (o: DraftOptions): Cadence => o.cadence ?? "weekly";
+const cadence = (o: Pick<DraftOptions, "cadence">): Cadence => o.cadence ?? "weekly";
 
 /** Every fixed phrase the templates can emit, for the verifier allowlist. */
 export const TEMPLATE_PHRASES: string[] = [
@@ -117,7 +125,7 @@ function withImage(block: Block, it: Item, o: DraftOptions): Block {
 }
 
 export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
-  const groups = groupItems(items);
+  const groups = groupItems(items, opts.now);
   const wanted = opts.layouts;
   const all: Array<{ id: Draft["id"]; name: string; blocks: Block[] }> = [
     { id: "brief", name: T.brief, blocks: briefBlocks(groups, opts) },
@@ -126,11 +134,14 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
   ];
   const layouts = wanted ? all.filter((l) => wanted.includes(l.id)) : all;
   const subject = subjectLine(items, opts);
+  const label = periodLabel(opts);
   return layouts.map(({ id, name, blocks }) => {
     const all: Block[] = [{ kind: "h1", text: subject }, ...blocks];
     if (opts.footer) all.push({ kind: "p", text: opts.footer });
     const markdown = renderMarkdown(all);
-    const allow = [...TEMPLATE_PHRASES, ...(opts.footer ? [opts.footer] : [])];
+    // The period's name is the template's own word, not something a source said, so it is allowed
+    // here for the same reason the headings are.
+    const allow = [...TEMPLATE_PHRASES, ...(label ? [label] : []), ...(opts.footer ? [opts.footer] : [])];
     const verification = verifyDraft(markdown, items, { timeZone: opts.timeZone, allow });
     return { id, name, subject, markdown, html: renderHtml(all, subject), item_ids: items.map((i) => i.id), verification };
   });
@@ -139,10 +150,12 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
 /** Upcoming events and events already held are kept apart, each in its own section. */
 interface Groups { events: Item[]; pastEvents: Item[]; news: Item[]; linkedin: Item[]; members: Item[]; ceo: Item[] }
 
-function groupItems(items: Item[]): Groups {
+function groupItems(items: Item[], now?: Date): Groups {
   const g: Groups = { events: [], pastEvents: [], news: [], linkedin: [], members: [], ceo: [] };
   for (const it of items) {
-    if (isPastEvent(it)) g.pastEvents.push(it);
+    // With a clock the date decides, so the newsletter and the review list agree about what is
+    // already held. Without one the flag stored at fetch time is all there is.
+    if (isPastEvent(it, now)) g.pastEvents.push(it);
     else if (it.type === "event") g.events.push(it);
     else if (it.type === "news") g.news.push(it);
     else if (it.type === "ceo_update") g.ceo.push(it);
@@ -154,10 +167,30 @@ function groupItems(items: Item[]): Groups {
   return g;
 }
 
+/**
+ * The subject names the month: "Volta this month: September 2026".
+ *
+ * It used to be the first selected item's title, and that item is whatever sorts first in the
+ * selection — the soonest upcoming event, once anything has been ticked. So an event Bader added
+ * for next week became the title of the whole newsletter without his ever choosing it. The month
+ * is the one thing that is true of every issue and that nothing he ticks can change.
+ *
+ * A weekly newsletter has no natural name for its period, so it still names its top item, as it
+ * always has. The same fallback covers a monthly caller that has no period to give.
+ */
 function subjectLine(items: Item[], o: DraftOptions): string {
-  const top = items[0];
   const prefix = P.subjectPrefix(cadence(o));
-  return top ? `${prefix}: ${top.title}` : prefix;
+  const name = periodLabel(o) ?? items[0]?.title;
+  return name ? `${prefix}: ${name}` : prefix;
+}
+
+/** "September 2026", from the monthly period key; nothing for a weekly period or a missing one. */
+export function periodLabel(o: Pick<DraftOptions, "cadence" | "period">): string | undefined {
+  if (cadence(o) !== "monthly") return undefined;
+  const m = /^(\d{4})-(\d{2})$/.exec(o.period ?? "");
+  if (!m) return undefined;
+  const month = MONTH[Number(m[2]) - 1];
+  return month ? `${month} ${m[1]}` : undefined;
 }
 
 function section(title: string, list: Item[], render: (it: Item) => Block, o: DraftOptions): Block[] {

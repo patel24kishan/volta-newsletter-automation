@@ -108,6 +108,15 @@ describe("the rules Claude is given", () => {
     expect(INSTRUCTIONS).toMatch(/"refresh", "refresh this month", "fetch again" -> prepare_month with force/);
     expect(INSTRUCTIONS).toMatch(/ask only for what is missing/);
 
+    // An event he added is corrected, never added again: two added events never merge, so the
+    // newsletter would print both.
+    expect(INSTRUCTIONS).toMatch(/Adding the same event twice puts it in the newsletter twice/);
+    expect(INSTRUCTIONS).toMatch(/"I forgot the link", "fix the link"/);
+    expect(INSTRUCTIONS).toMatch(/-> edit_item on that event/);
+    expect(INSTRUCTIONS).toMatch(/Never add_event again to correct one/);
+    expect(INSTRUCTIONS).toMatch(/"remove that event", "delete that event"/);
+    expect(INSTRUCTIONS).toMatch(/-> remove_event, after he has said to/);
+
     expect(INSTRUCTIONS).toMatch(/note to editor \(not printed\)" are advice for Bader/);
     expect(INSTRUCTIONS).toMatch(/Do not replace the list with a summary/);
   });

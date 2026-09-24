@@ -12,8 +12,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Alerter } from "../alerts.js";
-import { buildDrafts, type Draft } from "../draft/templates.js";
-import { itemFromManualEvent, manualEventFromFields, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
+import { buildDrafts, type Draft, type DraftOptions } from "../draft/templates.js";
+import { isManualItem, itemFromManualEvent, manualEventFromFields, MANUAL_REF_PREFIX, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
 import { rankItems, type RankedItem } from "../pipeline/rank.js";
 import type { Violation } from "../pipeline/verify.js";
 import type { PublishedCampaign } from "../publish/types.js";
@@ -33,6 +33,21 @@ export const CLAUDE_CHANNEL = "claude";
 
 function now(st: ReviewState): Date {
   return st.now?.() ?? new Date();
+}
+
+/**
+ * What every draft built from this review is told: the period it covers, so the subject can name
+ * it, and the clock, so the newsletter splits held from upcoming exactly as the candidate list
+ * does. Both builds here go through this, or the email rebuilt at Approve could disagree with the
+ * one that was previewed.
+ */
+function draftOptions(st: ReviewState): Pick<DraftOptions, "timeZone" | "cadence" | "period" | "now"> {
+  return {
+    timeZone: st.timeZone,
+    now: now(st),
+    ...(st.cadence ? { cadence: st.cadence } : {}),
+    ...(st.week ? { period: st.week } : {}),
+  };
 }
 
 /** The channel whose ticks count: the list's, or Claude's when no Slack list was posted. */
@@ -130,6 +145,39 @@ export function addEvent(st: ReviewState, fields: ManualEventFields): { item: It
   return { item };
 }
 
+/**
+ * Forget an event the curator added. Only his own entries can go: everything else traces to a
+ * source, and removing it there would be a lie about what was published.
+ *
+ * Without this the only way to correct an added event was to add it again, and two hand-added
+ * events never merge (src/pipeline/dedupe.ts), so the newsletter printed both. The event leaves
+ * storage, this period's candidates and the selection together, so nothing is left pointing at it.
+ * Anything already approved or sent is untouched; this changes what the next draft is built from.
+ */
+export function removeEvent(st: ReviewState, itemId: string): { removed: Item } | { error: string } {
+  if (!st.storage) throw new Error("events are not available: no storage for this review");
+  const found = st.candidates.find((c) => c.item.id === itemId)?.item;
+  if (!found) return { error: `${itemId} is not one of this period's candidates` };
+  if (!isManualItem(found)) return { error: `${found.title} comes from ${found.source}, so it is not yours to remove. Untick it to leave it out.` };
+  // As the curator last saw it. Removing is the one step he cannot undo, so the name he is shown
+  // has to be the name he gave it, not the one it was stored under before he renamed it.
+  const removed = withEdits(st, [found])[0] ?? found;
+
+  st.storage.deleteManualEvent(found.source_ref.slice(MANUAL_REF_PREFIX.length));
+  // His wording goes with the item it described. Left behind it would never be applied again (the
+  // item is gone), but it would sit in storage for good, and a returning id would revive it.
+  if (st.edits && st.week) st.edits.clearCuratorEdits(st.week, itemId);
+  st.candidates = st.candidates.filter((c) => c.item.id !== itemId);
+  for (const [channel, ids] of st.selections) st.selections.set(channel, ids.filter((id) => id !== itemId));
+
+  const r = st.reminder;
+  if (r) {
+    st.reminder = { ...r, input: { ...r.input, candidates: st.candidates, preselectedIds: currentSelection(st) } };
+  }
+  persistSession(st);
+  return { removed };
+}
+
 /** The run's time: what past and upcoming were decided against. */
 function runAt(st: ReviewState): Date {
   const sent = st.reminder?.sentAt ? new Date(st.reminder.sentAt) : undefined;
@@ -197,7 +245,7 @@ export function buildDraft(st: ReviewState, alerter: Alerter, ids: string[] = cu
   if (items.length === 0) return { ok: false, reason: "nothing-selected", notes };
 
   // The preview shows a local image inline; the email gets a hosted copy at Approve.
-  const drafts = buildDrafts(items, { timeZone: st.timeZone, layouts: [st.layout ?? "events-first"], ...(st.cadence ? { cadence: st.cadence } : {}), imageSrc: previewImage });
+  const drafts = buildDrafts(items, { ...draftOptions(st), layouts: [st.layout ?? "events-first"], imageSrc: previewImage });
   for (const d of drafts.filter((d) => !d.verification.ok)) {
     alerter.alert("error", `draft:${d.id}`, `withheld: ${d.verification.violations.map((v) => `${v.kind} "${v.value}"`).join(", ")}`, "inspect the items; the draft was not shown");
   }
@@ -236,7 +284,7 @@ async function emailDraft(st: ReviewState, record: DraftRecord): Promise<Draft> 
   const upload = st.publisher?.uploadImage?.bind(st.publisher);
   if (upload) for (const ref of local) hosted.set(ref, await upload(readLocalImage(ref)));
   const [d] = buildDrafts(record.items, {
-    timeZone: st.timeZone, layouts: [record.draft.id], ...(st.cadence ? { cadence: st.cadence } : {}),
+    ...draftOptions(st), layouts: [record.draft.id],
     imageSrc: (ref) => (isImageUrl(ref) ? ref : hosted.get(ref)),
   });
   return { ...record.draft, html: d!.html };

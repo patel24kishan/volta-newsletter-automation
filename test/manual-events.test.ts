@@ -76,13 +76,16 @@ describe("validating what the curator typed", () => {
     expect(validateManualEvent(ok)).toEqual({});
     expect(validateManualEvent({ ...ok, title: "   " })).toHaveProperty("title");
     expect(validateManualEvent({ ...ok, starts_at: "next Tuesday" })).toHaveProperty("starts_at");
-    expect(validateManualEvent({ ...ok, link: "voltaeffect.com/events" })).toHaveProperty("link");
+    expect(validateManualEvent({ ...ok, link: "not a link" })).toHaveProperty("link");
     expect(validateManualEvent({ ...ok, title: "x".repeat(200) })).toHaveProperty("title");
   });
 
   it("allows a blank link but not a start in the past", () => {
     expect(validateManualEvent({ ...ok, link: "" })).toEqual({});
     expect(validateManualEvent({ ...ok, link: "https://voltaeffect.com/demo-night" })).toEqual({});
+    // The scheme is what people leave off; it is filled in rather than refused.
+    expect(validateManualEvent({ ...ok, link: "voltaeffect.com/events" })).toEqual({});
+    expect(validateManualEvent({ ...ok, link: "www.eventbrite.ca/e/demo-night-1" })).toEqual({});
     expect(validateManualEvent(ok, new Date(NOW))).toEqual({});
     expect(validateManualEvent({ ...ok, starts_at: "2026-09-01T22:00:00.000Z" }, new Date(NOW))).toHaveProperty("starts_at");
   });

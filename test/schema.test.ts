@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { itemId, validateItem } from "../src/schema.js";
+import { itemId, normalizeLink, validateItem } from "../src/schema.js";
 import { sampleItem } from "./helpers.js";
 
 describe("validateItem", () => {
@@ -42,5 +42,26 @@ describe("itemId", () => {
   it("differs across sources and links", () => {
     expect(itemId("a", "https://x/1")).not.toBe(itemId("b", "https://x/1"));
     expect(itemId("a", "https://x/1")).not.toBe(itemId("a", "https://x/2"));
+  });
+});
+
+describe("normalizeLink", () => {
+  it("fills in the scheme people leave off", () => {
+    expect(normalizeLink("www.eventbrite.ca/e/demo-night-1")).toBe("https://www.eventbrite.ca/e/demo-night-1");
+    expect(normalizeLink("voltaeffect.com/events")).toBe("https://voltaeffect.com/events");
+    expect(normalizeLink("  lu.ma/mixer  ")).toBe("https://lu.ma/mixer");
+    expect(normalizeLink("example.co.uk/a?b=1#c")).toBe("https://example.co.uk/a?b=1#c");
+  });
+
+  it("leaves a link that already has one exactly as it is", () => {
+    expect(normalizeLink("https://voltaeffect.com/events")).toBe("https://voltaeffect.com/events");
+    expect(normalizeLink("http://old.example.com/x")).toBe("http://old.example.com/x");
+    expect(normalizeLink(" https://lu.ma/mixer ")).toBe("https://lu.ma/mixer");
+  });
+
+  it("hands back anything it cannot repair, so the caller's own message is what is shown", () => {
+    for (const bad of ["", "   ", "not a link", "a link to the page", "eventbrite", "mailto:hi@volta.test", "ftp://files.test/x"]) {
+      expect(normalizeLink(bad), bad).toBe(bad.trim());
+    }
   });
 });

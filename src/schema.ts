@@ -178,6 +178,22 @@ export function isAbsoluteHttpUrl(s: string): boolean {
   }
 }
 
+/**
+ * A link as the curator typed it, made usable. People copy addresses without the scheme
+ * ("www.eventbrite.com/e/…", "voltaeffect.com/events"), and every browser fills that in for them;
+ * refusing it and asking for "a full link starting with https://" is a puzzle, not a safeguard.
+ *
+ * Only the scheme is added, and only when what remains looks like a host with a dot in it. The
+ * address is otherwise untouched, and anything still unusable comes back unchanged so the caller's
+ * own message is what the curator reads. `https` because an http-only site is vanishingly rare now
+ * and can still be typed in full.
+ */
+export function normalizeLink(s: string): string {
+  const v = s.trim();
+  if (v === "" || /^[a-z][a-z0-9+.-]*:/i.test(v)) return v;
+  return isAbsoluteHttpUrl(`https://${v}`) && /^[^/\s?#]+\.[^/\s?#]+/.test(v) ? `https://${v}` : v;
+}
+
 /** Deterministic id from source and link so re-fetching the same item yields the same id. */
 export function itemId(source: string, link: string): string {
   return `${source}:${fnv1a(link)}`;

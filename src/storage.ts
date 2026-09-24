@@ -7,7 +7,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { validateManualEvent, type ManualEvent, type NewManualEvent } from "./manual-events.js";
-import { EXTRA_FIELDS, validateItem, type Item, type RelatedLink } from "./schema.js";
+import { EXTRA_FIELDS, normalizeLink, validateItem, type Item, type RelatedLink } from "./schema.js";
 import { collapseWhitespace } from "./text.js";
 
 export interface Storage {
@@ -21,6 +21,8 @@ export interface Storage {
   addManualEvent(input: NewManualEvent): ManualEvent;
   /** Hand-added events starting within [fromIso, toIso], earliest first. */
   listManualEvents(fromIso: string, toIso: string): ManualEvent[];
+  /** Forget a hand-added event. False when there was no such event. */
+  deleteManualEvent(id: string): boolean;
   /** The week's Slack session as saved, raw; session.ts owns its shape and checks it. */
   loadSession(week: string): string | undefined;
   saveSession(week: string, state: string): void;
@@ -47,6 +49,8 @@ export interface Storage {
    */
   setCuratorEdit(period: string, itemId: string, field: string, value: string | null, nowIso: string): void;
   listCuratorEdits(period: string): CuratorEdit[];
+  /** Forget every change the curator made to one item. Returns how many were cleared. */
+  clearCuratorEdits(period: string, itemId: string): number;
   /**
    * A source the curator added himself. It lives here rather than in the config file, which is the
    * maintainer's and in production comes from a Google Sheet this process cannot write.
@@ -289,7 +293,7 @@ export class SqliteStorage implements Storage {
       starts_at: new Date(input.starts_at).toISOString(),
       location: collapseWhitespace(input.location ?? ""),
       description: collapseWhitespace(input.description ?? ""),
-      link: (input.link ?? "").trim(),
+      link: normalizeLink(input.link ?? ""),
       image: (input.image ?? "").trim(),
       created_at: new Date().toISOString(),
     };
@@ -305,6 +309,12 @@ export class SqliteStorage implements Storage {
     return this.db
       .prepare("SELECT id, title, starts_at, location, description, link, image, created_at FROM manual_events WHERE starts_at >= ? AND starts_at <= ? ORDER BY starts_at ASC")
       .all(from, to) as unknown as ManualEvent[];
+  }
+
+  deleteManualEvent(id: string): boolean {
+    // Only the curator's own entry goes; items already fetched from it stay in this period's saved
+    // list until it is prepared again, and a campaign already created is untouched.
+    return this.db.prepare("DELETE FROM manual_events WHERE id = ?").run(id).changes > 0;
   }
 
   loadSession(week: string): string | undefined {
@@ -375,6 +385,11 @@ export class SqliteStorage implements Storage {
     // Only the source goes; its items stay, so a newsletter already sent can still be traced back.
     const res = this.db.prepare("DELETE FROM curator_sources WHERE id = ?").run(id);
     return Number(res.changes) > 0;
+  }
+
+  clearCuratorEdits(period: string, itemId: string): number {
+    // Used when the item itself goes, so his wording does not outlive what it described.
+    return this.db.prepare("DELETE FROM curator_edits WHERE period = ? AND item_id = ?").run(period, itemId).changes as number;
   }
 
   listCuratorEdits(period: string): CuratorEdit[] {

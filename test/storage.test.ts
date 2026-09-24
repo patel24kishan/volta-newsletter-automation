@@ -9,6 +9,28 @@ describe("SqliteStorage", () => {
   });
   afterEach(() => s.close());
 
+  it("forgets a hand-added event, and says so when there was none", () => {
+    const e = s.addManualEvent({ title: "Open House", starts_at: "2026-10-20T20:00:00.000Z" });
+    expect(s.listManualEvents("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z").map((x) => x.id)).toEqual([e.id]);
+    expect(s.deleteManualEvent(e.id)).toBe(true);
+    expect(s.listManualEvents("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z")).toEqual([]);
+    // Removing it twice, or removing one that was never there, is not an error.
+    expect(s.deleteManualEvent(e.id)).toBe(false);
+    expect(s.deleteManualEvent("me_never")).toBe(false);
+  });
+
+  it("clears every change made to one item, and leaves other items' alone", () => {
+    s.setCuratorEdit("2026-09", "manual-events:a", "title", "His title", "2026-09-24T12:00:00.000Z");
+    s.setCuratorEdit("2026-09", "manual-events:a", "summary", "His words", "2026-09-24T12:00:00.000Z");
+    s.setCuratorEdit("2026-09", "manual-events:b", "summary", "Another item", "2026-09-24T12:00:00.000Z");
+    expect(s.clearCuratorEdits("2026-09", "manual-events:a")).toBe(2);
+    expect(s.listCuratorEdits("2026-09").map((e) => e.item_id)).toEqual(["manual-events:b"]);
+    // Nothing to clear is not an error, and another period's edits are untouched.
+    expect(s.clearCuratorEdits("2026-09", "manual-events:a")).toBe(0);
+    expect(s.clearCuratorEdits("2026-10", "manual-events:b")).toBe(0);
+    expect(s.listCuratorEdits("2026-09")).toHaveLength(1);
+  });
+
   it("round-trips an item", () => {
     const it = sampleItem();
     expect(s.upsertItems([it])).toBe(1);

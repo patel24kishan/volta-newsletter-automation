@@ -29,7 +29,7 @@ import type { RankedItem } from "../pipeline/rank.js";
 import type { Publisher } from "../publish/types.js";
 import { EDIT_FIELD_LABEL, EDIT_FIELDS, type EditField } from "../review/edits.js";
 import {
-  addEvent, approve, buildDraft, CLAUDE_CHANNEL, candidateGroups, currentDraft, currentSelection, editItem, send, setSelection, startReview,
+  addEvent, approve, buildDraft, CLAUDE_CHANNEL, candidateGroups, currentDraft, currentSelection, editItem, removeEvent, send, setSelection, startReview,
   type DraftNotes, type ReviewState,
 } from "../review/review.js";
 import type { RunSummary } from "../run-week.js";
@@ -42,7 +42,7 @@ import { REVIEW_LABEL } from "../surface/blocks.js";
 import { greetingText, missedText, nothingDueText } from "../review/reminder.js";
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
 import { isManualItem } from "../manual-events.js";
-import { PANEL_MIME, PANEL_URI, panelHtml } from "./panel.js";
+import { PANEL_MIME, PANEL_URI, panelHtml, PREVIEW_URI } from "./panel.js";
 
 export const SERVER_NAME = "volta-newsletter";
 
@@ -67,6 +67,10 @@ Rules you must follow:
 - When a source could not be read, tell him what it needs (a token, an invite to the channel, a sign-in) and never let its empty section pass as "nothing happened this month".
 
 Usual order: newsletter_status, then prepare_month if the month is not prepared, then list_candidates, set_selection, edit_item / add_event as he asks, build_draft (repeat after any change), approve_draft, send_campaign.
+
+Events he added himself: he corrects them, he does not add them again. Adding the same event twice puts it in the newsletter twice.
+- "add the link to X", "I forgot the link", "fix the link", "change the date of X", "it is at Volta" -> edit_item on that event. Never add_event again to correct one.
+- "remove that event", "delete that event", "that one was a mistake" -> remove_event, after he has said to. Only events he added; anything from a source is unticked with set_selection instead.
 
 Sources: Bader says these in a few words. Take them as they are, and ask only for what is missing.
 - "sources", "list sources", "what do we read?" -> list_sources.
@@ -334,6 +338,16 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     title: "Newsletter review panel", description: "Tick items, edit wording, add events and build the draft.", mimeType: PANEL_MIME,
   }, async () => ({ contents: [{ uri: PANEL_URI, mimeType: PANEL_MIME, text: panelHtml() }] }));
 
+  // The built newsletter itself, so the panel can show it without the host having to open a
+  // loopback address. Empty until something has been built; the panel then falls back to the link.
+  server.registerResource("current-draft", PREVIEW_URI, {
+    title: "This month's newsletter, as it will look", description: "The rendered draft, for the review panel to show in place.", mimeType: "text/html",
+  }, async () => {
+    const st = await current();
+    const draft = currentDraft(st);
+    return { contents: [{ uri: PREVIEW_URI, mimeType: "text/html", text: draft?.draft.html ?? "" }] };
+  });
+
   server.registerTool("list_candidates", {
     title: "List the candidates",
     description: "The candidates in groups (upcoming events, past events, news and updates), each with its id, whether it is ticked, and what Bader has edited. Use the ids with set_selection and edit_item. In apps that support it, this also opens the interactive review panel.",
@@ -372,7 +386,10 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     if (tick) ids = [...ids, ...tick];
     if (untick) ids = ids.filter((id) => !untick.includes(id));
     const r = setSelection(st, ids);
-    const titles = new Map(st.candidates.map((c) => [c.item.id, c.item.title]));
+    // Through candidateGroups, which applies his edits, so an item he renamed is read back to him
+    // under his own name rather than the one its source gave it.
+    const g = candidateGroups(st);
+    const titles = new Map([...g.upcomingEvents, ...g.pastEvents, ...g.other].map((c) => [c.item.id, c.item.title]));
     return text([
       `${r.selected.length} ticked: ${r.selected.map((id) => titles.get(id)).join("; ") || "nothing"}.`,
       ...(r.unknown.length ? [`Not candidates, ignored: ${r.unknown.join(", ")}.`] : []),
@@ -417,6 +434,26 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const r = editItem(st, item_id, field as EditField, clear ? null : value!);
     if ("error" in r) return text(`Not changed: ${r.error}`, true);
     return text(`${clear ? "Back to the source's" : "Changed the"} ${EDIT_FIELD_LABEL[field as EditField]}:\n${describeItem(r.item, currentSelection(st).includes(item_id), tz, d.clock.now())}\nRebuild with build_draft to see it in the newsletter.`);
+  });
+
+  server.registerTool("remove_event", {
+    title: "Remove an event Bader added",
+    description: "Forget an event Bader added himself, when it was a mistake or a duplicate. Only his own events; anything from a source is unticked instead. Ask him first. He says: remove that event, delete that event.",
+    inputSchema: {
+      item_id: z.string().describe("The event's id, as list_candidates shows it."),
+      confirm: z.boolean().describe("true only when Bader has said to remove it."),
+    },
+    annotations: { destructiveHint: true },
+  }, async ({ item_id, confirm }) => {
+    const st = await current();
+    if (!prepared(st)) return notPrepared();
+    if (!confirm) return text("Not removed: confirm must be true, and only once Bader has said to remove it.", true);
+    const r = removeEvent(st, item_id);
+    if ("error" in r) return text(`Not removed: ${r.error}`, true);
+    return text([
+      `Removed "${r.removed.title}". It is gone from this ${periodWord}'s list and will not come back on the next run.`,
+      "Anything already approved or sent is untouched. Rebuild with build_draft to see the newsletter without it.",
+    ].join("\n"));
   });
 
   server.registerTool("build_draft", {

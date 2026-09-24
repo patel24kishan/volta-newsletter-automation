@@ -3,7 +3,7 @@
  * in production the same shape comes from a Google Sheet through this interface.
  */
 import { readFile } from "node:fs/promises";
-import type { ItemType } from "./schema.js";
+import { isAbsoluteHttpUrl, normalizeLink, type ItemType } from "./schema.js";
 import { googleNewsUrl } from "./sources/google-news.js";
 
 export type SourceKind = "rss" | "ics" | "linkedin_company" | "google_news" | "slack_channel" | "manual";
@@ -112,6 +112,18 @@ export const SOURCE_KINDS: SourceKind[] = ["rss", "ics", "linkedin_company", "go
  * It writes back to `src`: a google_news source's URL is built from its terms, and the kinds that
  * are not read over HTTP get an empty one.
  */
+/**
+ * An address field, repaired in place and then judged. The scheme is the part people leave off, in
+ * a config file as much as in the chat, so it is filled in here rather than refused — the same
+ * rule `add_event` follows, so the two address boxes Bader sees behave alike. It only ever adds a
+ * scheme, so a genuinely wrong address is still wrong and still reported.
+ */
+function fixLink(src: Record<string, unknown>, field: "url" | "fallback_link"): boolean {
+  if (typeof src[field] !== "string") return false;
+  src[field] = normalizeLink(src[field]);
+  return isAbsoluteHttpUrl(src[field] as string);
+}
+
 export function validateSource(src: Record<string, unknown>, where: string): string[] {
   const errors: string[] = [];
   if (typeof src.id !== "string" || src.id === "") errors.push(`${where}.id missing`);
@@ -139,15 +151,15 @@ export function validateSource(src: Record<string, unknown>, where: string): str
   } else if (src.kind === "manual") {
     // Read from storage, so there is no feed URL. A hand-added event may have no link of its
     // own, so the page to fall back to is required rather than optional here.
-    if (typeof src.fallback_link !== "string" || !/^https?:\/\//.test(src.fallback_link)) {
+    if (!fixLink(src, "fallback_link")) {
       errors.push(`${where}.fallback_link must be an http(s) page for a manual source, used when an added event has no link of its own`);
     }
     src.url = "";
-  } else if (typeof src.url !== "string" || !/^https?:\/\//.test(src.url)) {
+  } else if (!fixLink(src, "url")) {
     errors.push(`${where}.url must be http(s)`);
   }
   if (typeof src.enabled !== "boolean") errors.push(`${where}.enabled must be boolean`);
-  if (src.fallback_link !== undefined && (typeof src.fallback_link !== "string" || !/^https?:\/\//.test(src.fallback_link))) {
+  if (src.fallback_link !== undefined && !fixLink(src, "fallback_link")) {
     errors.push(`${where}.fallback_link must be an http(s) URL when present`);
   }
   return errors;

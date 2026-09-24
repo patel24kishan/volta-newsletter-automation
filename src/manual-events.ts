@@ -6,7 +6,7 @@
  */
 import { zonedToUtc } from "./clock.js";
 import type { SourceConfig } from "./config.js";
-import { isAbsoluteHttpUrl, itemId, type Item } from "./schema.js";
+import { isAbsoluteHttpUrl, itemId, normalizeLink, type Item } from "./schema.js";
 import { collapseWhitespace } from "./text.js";
 
 export const MANUAL_REF_PREFIX = "manual:";
@@ -67,7 +67,8 @@ export function manualEventFromFields(f: ManualEventFields, timeZone: string): N
   const e: NewManualEvent = { title: f.title ?? "", starts_at };
   if (f.location) e.location = f.location;
   if (f.description) e.description = f.description;
-  if (f.link) e.link = f.link;
+  // Taken as typed except for the scheme: "www.eventbrite.com/e/1" is what people paste.
+  if (f.link) e.link = normalizeLink(f.link);
   if (f.image) e.image = f.image;
   return e;
 }
@@ -89,7 +90,7 @@ export function validateManualEvent(e: NewManualEvent, now?: Date): ManualEventE
 
   if (collapseWhitespace(e.location ?? "").length > MANUAL_LIMITS.location) errors.location = `Keep the location under ${MANUAL_LIMITS.location} characters.`;
   if (collapseWhitespace(e.description ?? "").length > MANUAL_LIMITS.description) errors.description = `Keep the description under ${MANUAL_LIMITS.description} characters.`;
-  const link = (e.link ?? "").trim();
+  const link = normalizeLink(e.link ?? "");
   if (link && !isAbsoluteHttpUrl(link)) errors.link = "Enter a full link starting with http:// or https://, or leave it blank.";
   return errors;
 }

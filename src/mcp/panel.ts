@@ -12,6 +12,15 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 export const PANEL_URI = "ui://volta-newsletter/review-panel.html";
+/**
+ * The newsletter as it will look, for the panel to show in place.
+ *
+ * It is a resource rather than part of build_draft's result because the panel reads a resource
+ * from the server directly: the rendered email is several thousand words of markup that Claude has
+ * no use for and must never be asked to reproduce. The panel needs it because the host will not
+ * open the preview server's own `http://127.0.0.1` address (see panel-client.js).
+ */
+export const PREVIEW_URI = "ui://volta-newsletter/current-draft.html";
 /** The MCP Apps content type; the host renders a resource of this type as an app. */
 export const PANEL_MIME = "text/html;profile=mcp-app";
 
@@ -45,10 +54,13 @@ h3{font-size:15px;font-weight:500;margin:14px 0 6px}ul.items{list-style:none;mar
 .line{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;cursor:pointer}.title{font-weight:500}.detail{margin:4px 0 0 26px}
 ul.prints{margin:2px 0;padding-left:18px}.hold-note{color:var(--warn-fg);background:var(--warn-bg);padding:2px 6px;border-radius:4px;display:inline-block;margin:2px 0}.note{color:var(--muted);font-size:13px}
 button{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}button.primary{border-color:var(--accent);color:var(--accent)}button.link{border:0;padding:0;color:var(--accent);text-decoration:underline}
+button.danger{border-color:var(--color-text-danger,#a32d2d);color:var(--color-text-danger,#a32d2d)}
 button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .form{display:grid;gap:4px;margin:8px 0 4px 26px;max-width:520px}.form input,.form textarea{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg)}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}details.add{margin-top:14px}details.add .form{margin-left:0}.actions{margin-top:14px;display:grid;gap:8px}.draft{display:grid;gap:4px}
 .status{min-height:1.2em;font-size:13px;color:var(--muted)}.status.error{color:var(--color-text-danger,#a32d2d)}
+iframe.preview{width:100%;height:60vh;min-height:320px;border:1px solid var(--line);border-radius:6px;background:#fff;margin:6px 0}
+code.addr{font-family:var(--font-mono,ui-monospace,monospace);font-size:12px;user-select:all;word-break:break-all}
 `;
 
 let cached: string | undefined;

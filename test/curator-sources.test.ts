@@ -39,7 +39,9 @@ describe("a stored source as the fetchers see it", () => {
   });
 
   it("is refused, with the config file's own words, when the row cannot make a real source", () => {
-    expect(toSourceConfig(row({ url: "news.test/feed" }))).toEqual({ errors: ["source cur_entrevestor.url must be http(s)"] });
+    // A missing scheme is filled in, here as everywhere else he types an address.
+    expect(toSourceConfig(row({ url: "news.test/feed" }))).toMatchObject({ source: { url: "https://news.test/feed" } });
+    expect(toSourceConfig(row({ url: "the feed page" }))).toEqual({ errors: ["source cur_entrevestor.url must be http(s)"] });
     expect(toSourceConfig(row({ kind: "slack_channel", url: "", channel_id: "nope" })))
       .toEqual({ errors: ["source cur_entrevestor.channel_id must be a Slack channel id such as C0123ABCD for a slack_channel source"] });
   });

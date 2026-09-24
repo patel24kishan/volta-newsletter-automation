@@ -143,3 +143,30 @@ describe("the newsletter", () => {
     expect(md).toContain("## Last month at Volta");
   });
 });
+
+describe("an event that started between the run and the build", () => {
+  // The monthly run marked it upcoming, correctly, at 08:30. By the time Bader builds the draft it
+  // has begun. The candidate list has always decided this by the clock; the newsletter did not,
+  // so the same event could be held in one and still to come in the other.
+  const justStarted = upcomingEvent("Coffee and Co-Work", "2026-10-01T11:00:00Z");
+  const opts = { timeZone: TZ, cadence: "monthly" as const, period: "2026-10", layouts: ["events-first" as const] };
+
+  it("is held in the candidate list", () => {
+    const g = candidateGroups({ candidates: rankItems([justStarted], RUN), now: () => RUN });
+    expect(g.pastEvents.map((c) => c.item.title)).toEqual(["Coffee and Co-Work"]);
+    expect(g.upcomingEvents).toEqual([]);
+  });
+
+  it("is held in the newsletter too, once the draft is given the clock", () => {
+    const withClock = buildDrafts([justStarted], { ...opts, now: RUN })[0]!;
+    expect(withClock.verification.violations).toEqual([]);
+    expect(withClock.markdown).toContain("Last month at Volta");
+    expect(withClock.markdown.indexOf("Coffee and Co-Work")).toBeGreaterThan(withClock.markdown.indexOf("Last month at Volta"));
+  });
+
+  it("falls back to the flag stored when it was fetched if no clock is given", () => {
+    const md = buildDrafts([justStarted], opts)[0]!.markdown;
+    expect(md).not.toContain("Last month at Volta");
+    expect(md).toContain("Coffee and Co-Work");
+  });
+});

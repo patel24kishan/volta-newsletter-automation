@@ -86,7 +86,7 @@ describe("the newsletter tools, as Claude uses them", () => {
   it("offers the tools with the rules as instructions, and takes no newsletter text where it must not", async () => {
     const c = await connect();
     const { tools } = await c.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_source", "send_campaign", "set_selection", "set_source"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_event", "remove_source", "send_campaign", "set_selection", "set_source"]);
     expect(c.client.getInstructions()).toBe(INSTRUCTIONS);
     expect(INSTRUCTIONS).toMatch(/Never write newsletter text yourself/);
     // Building, approving and sending take ids only: Claude cannot hand them words to publish.
@@ -110,6 +110,12 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect(page.contents[0]).toMatchObject({ mimeType: "text/html;profile=mcp-app" });
     expect(String((page.contents[0] as { text: string }).text)).toContain('<main id="root">');
 
+    // The panel reads the newsletter itself from here, because the app will not open the preview
+    // server's loopback address. Empty until something is built, never missing.
+    expect(resources).toContainEqual(expect.objectContaining({ uri: "ui://volta-newsletter/current-draft.html", mimeType: "text/html" }));
+    const beforeBuild = await c.client.readResource({ uri: "ui://volta-newsletter/current-draft.html" });
+    expect(String((beforeBuild.contents[0] as { text: string }).text)).toBe("");
+
     await c.call("prepare_month");
     const first = (await c.client.callTool({ name: "list_candidates", arguments: {} })) as unknown as { structuredContent: { periodLabel: string; dryRun: boolean; ticked: number; total: number; groups: Array<{ key: string; items: Array<{ id: string; title: string; ticked: boolean }> }> } };
     expect(first.structuredContent).toMatchObject({ periodLabel: "October 2026", dryRun: true, total: 3 });
@@ -126,9 +132,15 @@ describe("the newsletter tools, as Claude uses them", () => {
 
     // Build from the panel: the result carries what the panel shows (subject, preview, key).
     const built = (await c.client.callTool({ name: "build_draft", arguments: {} })) as unknown as { structuredContent: { key: string; subject: string; previewUrl: string | null; notes: string[] } };
-    expect(built.structuredContent.subject).toMatch(/^Volta this month: /);
+    expect(built.structuredContent.subject).toBe("Volta this month: October 2026");
     expect(built.structuredContent.previewUrl).toMatch(/^http:\/\/127\.0\.0\.1:3111\/preview\//);
     expect(built.structuredContent.key).toMatch(/^[0-9a-f-]{36}$/);
+
+    // And now the resource carries the built newsletter, which is what the panel shows in place.
+    const shown = await c.client.readResource({ uri: "ui://volta-newsletter/current-draft.html" });
+    const html = String((shown.contents[0] as { text: string }).text);
+    expect(html).toContain("<html");
+    expect(html).toContain(built.structuredContent.subject);
     await c.close();
   });
 
@@ -156,11 +168,26 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect(added.text).toMatch(/Added and ticked:\n- \[x\] Pitch Night \| on 2026-10-15 19:00 at Volta/);
     expect((await c.call("add_event", { title: "Old one", date: "2026-09-01", time: "19:00" })).text).toMatch(/Not added[\s\S]*starts_at/);
 
+    // A link pasted without the scheme is what Bader actually types; it is filled in, not refused.
+    const pasted = await c.call("add_event", { title: "Open House", date: "2026-10-20", time: "17:00", link: "www.eventbrite.ca/e/open-house-1" });
+    expect(pasted.isError).toBeFalsy();
+    expect(pasted.text).toContain("https://www.eventbrite.ca/e/open-house-1");
+    // Something that is not an address at all still gets the sentence that says what to do.
+    const junk = await c.call("add_event", { title: "Nope", date: "2026-10-21", time: "17:00", link: "a link to the page" });
+    expect(junk.isError).toBe(true);
+    expect(junk.text).toMatch(/link: Enter a full link starting with http:\/\/ or https:\/\//);
+    // And a link forgotten at first is fixed in place, rather than by adding the event again.
+    const openHouse = /id: (manual-events:[^\s)]+)/.exec((await c.call("list_candidates")).text)?.[1];
+    expect(openHouse, "the added event should be listed").toBeDefined();
+    expect((await c.call("edit_item", { item_id: openHouse!, field: "link", text: "lu.ma/open-house" })).text).toContain("https://lu.ma/open-house");
+
     expect((await c.call("edit_item", { item_id: mixer, field: "summary", text: "Drinks, demos and the whole fall cohort." })).text).toMatch(/edited by Bader: description/);
     expect((await c.call("edit_item", { item_id: mixer, field: "title", text: "Party" })).isError).toBe(true);
 
     const built = await c.call("build_draft");
-    expect(built.text).toMatch(/Subject: Volta this month: /);
+    // The month, not the event just added and ticked: nothing Bader adds can take the title.
+    expect(built.text).toContain("Subject: Volta this month: October 2026");
+    expect(built.text).not.toContain("Subject: Volta this month: Pitch Night");
     expect(built.text).toMatch(/Preview: http:\/\/127\.0\.0\.1:3111\/preview\//);
     expect(built.text).toContain("**Changed by you**\n• **Fall Mixer**: description");
     expect(built.text).toContain("Drinks, demos and the whole fall cohort.");
@@ -261,6 +288,56 @@ describe("the newsletter tools, as Claude uses them", () => {
   });
 });
 
+describe("an event Bader added and then wants to correct", () => {
+  it("is fixed in place and can be removed, so it is never added twice", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+
+    const added = await c.call("add_event", { title: "Open House", date: "2026-10-20", time: "17:00" });
+    expect(added.isError).toBeFalsy();
+    const id = /id: (manual-events:[^\s)]+)/.exec((await c.call("list_candidates")).text)?.[1];
+    expect(id, "the added event should be listed").toBeDefined();
+
+    // The correction he actually wants: the link he forgot, on the event he already added.
+    expect((await c.call("edit_item", { item_id: id!, field: "link", text: "lu.ma/open-house" })).text).toContain("https://lu.ma/open-house");
+    const once = (await c.call("list_candidates")).text.split("Open House").length - 1;
+    expect(once, "still one event, not two").toBe(1);
+
+    // Renamed, then removed: both messages must use the name he gave it, not the stored one.
+    // Removing is the one step he cannot undo, so a confirmation naming a title he has already
+    // renamed away is the confirmation he most needs to be able to trust.
+    await c.call("edit_item", { item_id: id!, field: "title", text: "Autumn Open House" });
+    const ticked = await c.call("set_selection", { tick: [id!] });
+    expect(ticked.text).toContain("Autumn Open House");
+    expect(ticked.text).not.toContain("Open House;");
+
+    // Removing needs him to have said so.
+    expect((await c.call("remove_event", { item_id: id! })).isError).toBe(true);
+    const removed = await c.call("remove_event", { item_id: id!, confirm: true });
+    expect(removed.text).toContain('Removed "Autumn Open House"');
+    // And his wording goes with the item, rather than outliving what it described.
+    expect(storage.listCuratorEdits("2026-10").filter((e) => e.item_id === id)).toEqual([]);
+    expect((await c.call("list_candidates")).text).not.toContain("Open House");
+
+    // Gone for good: a refresh re-reads every source and it does not come back.
+    await c.call("prepare_month", { force: true });
+    expect((await c.call("list_candidates")).text).not.toContain("Open House");
+    await c.close();
+  });
+
+  it("refuses to remove anything that came from a source, and says what to do instead", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+    const sourced = /id: (volta-calendar:[^\s)]+)/.exec((await c.call("list_candidates")).text)?.[1];
+    expect(sourced, "a calendar event should be listed").toBeDefined();
+    const r = await c.call("remove_event", { item_id: sourced!, confirm: true });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Untick it");
+    expect((await c.call("list_candidates")).text).toContain(sourced!);
+    await c.close();
+  });
+});
+
 describe("the sources Bader manages himself", () => {
   const FEED = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
 <item><title>Volta member raises a seed round</title><link>https://entrevestor.test/a</link><guid>ea</guid><pubDate>Thu, 10 Sep 2026 09:00:00 GMT</pubDate><description>A Volta member closed a seed round. The company is in Halifax.</description></item>
@@ -335,11 +412,25 @@ describe("the sources Bader manages himself", () => {
     await c.close();
   });
 
+  it("takes a feed address pasted without its scheme, as the add-event link box does", async () => {
+    BODIES["https://entrevestor.test/feed"] = FEED;
+    try {
+      const c = await connect();
+      const r = await c.call("add_source", { kind: "rss", url: "entrevestor.test/feed", name: "Entrevestor", check: false });
+      expect(r.isError).toBeFalsy();
+      expect(r.text).toContain("https://entrevestor.test/feed");
+      expect((await c.call("list_sources")).text).toContain("https://entrevestor.test/feed");
+      await c.close();
+    } finally {
+      delete BODIES["https://entrevestor.test/feed"];
+    }
+  });
+
   it("says what a feed is missing rather than guessing at it", async () => {
     const c = await connect();
-    const bad = await c.call("add_source", { kind: "rss", url: "entrevestor.test/feed" });
+    const bad = await c.call("add_source", { kind: "rss", url: "the entrevestor feed page" });
     expect(bad.isError).toBe(true);
-    expect(bad.text).toContain("a feed needs its full address, starting with https://");
+    expect(bad.text).toContain("a feed needs its full address, such as https://");
     expect((await c.call("add_source", { kind: "google_news" })).text).toContain("A news search needs the words to search for");
     expect((await c.call("add_source", { kind: "slack_channel", channel_id: "#members" })).text).toContain("Copy link");
     expect((await c.call("list_sources")).text).not.toContain("cur_");

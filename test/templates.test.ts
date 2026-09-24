@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDrafts, HTML_CHROME, MERGE_TAGS, whenLine } from "../src/draft/templates.js";
+import { itemFromManualEvent } from "../src/manual-events.js";
 import { sampleItem } from "./helpers.js";
 
 const TZ = "America/Halifax";
@@ -175,3 +176,60 @@ function visibleText(html: string): string {
 function words(s: string): string[] {
   return s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 }
+
+describe("the subject line", () => {
+  const monthly = { timeZone: TZ, cadence: "monthly" as const, period: "2026-09" };
+
+  it("names the month, so nothing Bader ticks can become the title of the email", () => {
+    for (const d of buildDrafts([mixer, yoga, post, news], monthly)) {
+      expect(d.subject, d.id).toBe("Volta this month: September 2026");
+      expect(d.verification.violations, d.id).toEqual([]);
+    }
+  });
+
+  it("is the same whichever item leads the selection", () => {
+    const opts = { ...monthly, layouts: ["standard" as const] };
+    const a = buildDrafts([yoga, mixer], opts)[0]!;
+    const b = buildDrafts([mixer, yoga], opts)[0]!;
+    expect(a.subject).toBe(b.subject);
+    expect(a.subject).not.toContain("Yoga");
+  });
+
+  it("still names the month when nothing is ticked at all", () => {
+    expect(buildDrafts([], { ...monthly, layouts: ["standard"] })[0]!.subject).toBe("Volta this month: September 2026");
+  });
+
+  it("names the top item when there is no month to name, as a weekly newsletter always has", () => {
+    expect(buildDrafts([mixer, yoga], { timeZone: TZ, layouts: ["standard"] })[0]!.subject).toBe("Volta this week: AI Showcase and Mixer");
+    expect(buildDrafts([mixer], { timeZone: TZ, cadence: "monthly", layouts: ["standard"] })[0]!.subject).toBe("Volta this month: AI Showcase and Mixer");
+  });
+});
+
+describe("the order items print in", () => {
+  const held = (title: string, date: string) => sampleItem({
+    type: "event", source: "volta-calendar", link: `https://e.test/${encodeURIComponent(title)}`, title, date,
+    summary: `${title} filled the room.`, raw_excerpt: `${title} ${title} filled the room.`, event_timing: "past",
+  });
+  // An event Bader added himself, built the way the pipeline builds it, to prove it is placed by
+  // its date like any other and not left wherever it was added.
+  const added = itemFromManualEvent(
+    { id: "me_1", title: "Founder Breakfast", starts_at: "2026-09-20T12:00:00Z", location: "Volta", description: "Founder Breakfast, over coffee.", link: "", image: "", created_at: "2026-09-10T12:00:00Z" },
+    { id: "manual-events", type: "event" }, "https://voltaeffect.com/events",
+  );
+  const opts = { timeZone: TZ, cadence: "monthly" as const, period: "2026-09", layouts: ["events-first" as const] };
+
+  it("prints upcoming events soonest first, an added event among them by its date", () => {
+    // Given in the wrong order on purpose: the dates decide, not the selection.
+    const d = buildDrafts([yoga, added, mixer], opts)[0]!;
+    expect(d.verification.violations).toEqual([]);
+    const at = (s: string) => d.markdown.indexOf(s);
+    expect(at("AI Showcase and Mixer")).toBeLessThan(at("Founder Breakfast")); // Sep 16, then Sep 20
+    expect(at("Founder Breakfast")).toBeLessThan(at("Yoga")); // Sep 20, then Sep 24
+  });
+
+  it("prints last month's events most recent first", () => {
+    const d = buildDrafts([held("Summer Summit", "2026-09-03T18:00:00Z"), held("Demo Night", "2026-09-17T22:00:00Z")], opts)[0]!;
+    expect(d.verification.violations).toEqual([]);
+    expect(d.markdown.indexOf("Demo Night")).toBeLessThan(d.markdown.indexOf("Summer Summit"));
+  });
+});

@@ -45,8 +45,8 @@ describe("what he gave, as a source to store", () => {
   });
 
   it("says what is missing, in words he can act on", () => {
-    expect(sourceFromFields({ kind: "rss" }, [])).toEqual({ errors: ["a feed needs its full address, starting with https://."] });
-    expect(sourceFromFields({ kind: "ics", url: "partner.test/cal" }, [])).toEqual({ errors: ["a calendar needs its full address, starting with https://."] });
+    expect(sourceFromFields({ kind: "rss" }, [])).toEqual({ errors: ["a feed needs its full address, such as https://entrevestor.com/feed."] });
+    expect(sourceFromFields({ kind: "ics", url: "the calendar page" }, [])).toEqual({ errors: ["a calendar needs its full address, such as https://entrevestor.com/feed."] });
     expect(sourceFromFields({ kind: "google_news" }, [])).toEqual({ errors: ["A news search needs the words to search for, such as Volta Halifax."] });
     expect(sourceFromFields({ kind: "slack_channel" }, [])).toEqual({ errors: [expect.stringContaining("Copy link")] });
   });

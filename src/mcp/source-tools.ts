@@ -8,6 +8,7 @@
  */
 import { partsInZone } from "../clock.js";
 import type { Config, SourceConfig, SourceKind } from "../config.js";
+import { isAbsoluteHttpUrl, normalizeLink } from "../schema.js";
 import { curatorSourceId } from "../sources/curator-sources.js";
 import type { CuratorSource, NewCuratorSource } from "../storage.js";
 
@@ -61,7 +62,9 @@ export function slackChannelId(given: string): { id: string } | { error: string 
 /** What Bader gave, as a row ready to store, or the reasons it cannot be one. */
 export function sourceFromFields(f: AddSourceFields, takenIds: Iterable<string>): { row: NewCuratorSource } | { errors: string[] } {
   const errors: string[] = [];
-  const url = f.url?.trim() ?? "";
+  // The scheme is what people leave off when they copy an address, so it is filled in rather
+  // than refused, exactly as it is for the link on an event he adds.
+  const url = normalizeLink(f.url ?? "");
   let channelId = "";
 
   if (f.kind === "google_news") {
@@ -74,8 +77,8 @@ export function sourceFromFields(f: AddSourceFields, takenIds: Iterable<string>)
       if ("error" in found) errors.push(found.error);
       else channelId = found.id;
     }
-  } else if (!/^https?:\/\//.test(url)) {
-    errors.push(`${KIND_LABEL[f.kind]} needs its full address, starting with https://.`);
+  } else if (!isAbsoluteHttpUrl(url)) {
+    errors.push(`${KIND_LABEL[f.kind]} needs its full address, such as https://entrevestor.com/feed.`);
   }
   if (errors.length) return { errors };
 

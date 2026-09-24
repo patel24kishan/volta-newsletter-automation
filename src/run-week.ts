@@ -20,7 +20,7 @@ import { rankItems, type RankedItem } from "./pipeline/rank.js";
 import { ExtractiveSummarizer } from "./pipeline/summarize.js";
 import { isPastEvent, type Item } from "./schema.js";
 import { reminderDue, type FirstWorkday } from "./schedule/first-workday.js";
-import { dueWindow, windowsFor } from "./schedule/period.js";
+import { dueWindow, periodOf, windowsFor } from "./schedule/period.js";
 import type { Storage } from "./storage.js";
 
 export interface RunOptions {
@@ -133,8 +133,13 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   // the week. Only a person can put it in. Ranking alone would not guarantee that.
   const n = o.preselect ?? 10;
   // Held items and last month's events are listed but never pre-ticked: each is the curator's call.
-  const preselected = candidates.filter((c) => !c.item.requires_review && !isPastEvent(c.item)).slice(0, n).map((c) => c.item);
-  const drafts = buildDrafts(preselected, { timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config) });
+  // By the clock, the same way the draft below and the candidate list decide it: otherwise an event
+  // that has just started could be pre-ticked here and printed as already held in the newsletter.
+  const preselected = candidates.filter((c) => !c.item.requires_review && !isPastEvent(c.item, now)).slice(0, n).map((c) => c.item);
+  const drafts = buildDrafts(preselected, {
+    timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config),
+    period: periodOf(now, config).key, now,
+  });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {
     const md = join(o.outDir, "drafts", `${d.id}.md`);

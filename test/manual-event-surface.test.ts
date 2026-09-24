@@ -153,7 +153,8 @@ describe("submitting the form", () => {
   it("rejects a bad link or a start in the past, and adds nothing", async () => {
     const st = state();
     const before = st.candidates.length;
-    const bad = await addManualEvent(new FakeClient(), { ...FORM, link: "voltaeffect.com" }, st);
+    // "voltaeffect.com" is no longer a bad link: the scheme is filled in. This one cannot be saved.
+    const bad = await addManualEvent(new FakeClient(), { ...FORM, link: "a link to the page" }, st);
     expect(bad.errors).toHaveProperty("link");
     expect(bad.item).toBeUndefined();
     const past = await addManualEvent(new FakeClient(), { ...FORM, date: "2026-09-01" }, st);

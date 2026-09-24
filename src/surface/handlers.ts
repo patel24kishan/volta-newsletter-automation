@@ -50,11 +50,11 @@ export interface SurfaceState {
    */
   week?: string;
   /** The curator's own wording for items, kept per period (src/review/edits.ts). Absent means no edits. */
-  edits?: Pick<Storage, "setCuratorEdit" | "listCuratorEdits">;
+  edits?: Pick<Storage, "setCuratorEdit" | "listCuratorEdits" | "clearCuratorEdits">;
   /** Whether the newsletter is weekly or monthly, for its wording. Weekly when absent. */
   cadence?: Cadence;
   /** Where events the curator adds are kept. Absent means the Add an event form is not offered. */
-  storage?: Pick<Storage, "addManualEvent">;
+  storage?: Pick<Storage, "addManualEvent" | "deleteManualEvent">;
   /** The manual source's config, so an added event links and types like a calendar event. */
   manualSource?: SourceConfig & { fallback_link: string };
   /** The run's clock, so re-ranking after an addition matches the ranking already shown. */

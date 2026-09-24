@@ -15,7 +15,7 @@
 import { zonedToUtc } from "../clock.js";
 import { checkImage } from "../images.js";
 import { isManualItem, MANUAL_LIMITS } from "../manual-events.js";
-import { isAbsoluteHttpUrl, type Item } from "../schema.js";
+import { isAbsoluteHttpUrl, normalizeLink, type Item } from "../schema.js";
 import type { CuratorEdit } from "../storage.js";
 import { collapseWhitespace } from "../text.js";
 
@@ -67,9 +67,12 @@ export function normalizeEdit(item: Item, field: string, value: string, timeZone
       if (!v) return { error: "The location cannot be empty. To go back to the source's text, clear the edit instead." };
       if (v.length > EDIT_LIMITS.location) return { error: `Keep the location under ${EDIT_LIMITS.location} characters.` };
       return { value: v };
-    case "link":
-      if (!isAbsoluteHttpUrl(v)) return { error: "Enter a full link starting with http:// or https://." };
-      return { value: v };
+    case "link": {
+      // The same repair the add form makes, so a link fixed later is typed the same way.
+      const link = normalizeLink(v);
+      if (!isAbsoluteHttpUrl(link)) return { error: "Enter a full link starting with http:// or https://." };
+      return { value: link };
+    }
     case "starts_at": {
       const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(v);
       if (!m) return { error: "Give the date and time as YYYY-MM-DD HH:MM, for example 2026-10-22 19:00." };

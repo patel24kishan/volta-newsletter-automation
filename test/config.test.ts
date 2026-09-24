@@ -82,6 +82,22 @@ describe("validateSource, used for the config file and for a source the curator 
     expect(String(src.url)).toContain("news.google.com/rss/search");
   });
 
+  it("fills in a missing scheme rather than refusing the address, in the file as in the chat", () => {
+    const feed = { ...base(), url: "entrevestor.com/feed" };
+    expect(validateSource(feed, "source s1")).toEqual([]);
+    expect(feed.url).toBe("https://entrevestor.com/feed");
+
+    // The page a hand-added event falls back to, and an optional one on any source.
+    const manual = { id: "m", kind: "manual", type: "event", url: "", enabled: true, fallback_link: "voltaeffect.com/events" } as Record<string, unknown>;
+    expect(validateSource(manual, "source m")).toEqual([]);
+    expect(manual.fallback_link).toBe("https://voltaeffect.com/events");
+
+    // Only the scheme is ever added: something that is not an address is still refused.
+    expect(validateSource({ ...base(), url: "the feed page" }, "source s1")).toEqual(["source s1.url must be http(s)"]);
+    expect(validateSource({ id: "m2", kind: "manual", type: "event", url: "", enabled: true, fallback_link: "ask Bader" }, "source m2")[0])
+      .toContain("source m2.fallback_link must be an http(s) page");
+  });
+
   it("gives the same reasons wherever it is called from", () => {
     expect(validateSource({ ...base(), url: "ftp://news.test" }, "source s1")).toEqual(["source s1.url must be http(s)"]);
     expect(validateSource({ ...base(), kind: "carrier_pigeon" }, "sources[3]")[0]).toContain("sources[3].kind must be one of");

@@ -4,7 +4,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { panelItem } from "../src/mcp/newsletter-server.js";
-import { exposeExports, PANEL_MIME, PANEL_URI, panelHtml } from "../src/mcp/panel.js";
+import { exposeExports, PANEL_MIME, PANEL_URI, panelHtml, PREVIEW_URI } from "../src/mcp/panel.js";
 import { sampleItem } from "./helpers.js";
 
 const TZ = "America/Halifax";
@@ -25,6 +25,26 @@ describe("the panel page", () => {
     expect(html).not.toMatch(/<link[^>]+href=/);
     expect(html).toContain('<main id="root">');
     expect(html).toContain('callServerTool({ name, arguments: args })');
+  });
+
+  it("shows the newsletter itself rather than depending on the host to open a loopback address", () => {
+    const html = panelHtml();
+    // Read from the server as a resource, so the rendered email never travels through the chat.
+    expect(html).toContain(PREVIEW_URI);
+    expect(html).toContain('readServerResource({ uri: PREVIEW_URI })');
+    // srcdoc, never src: the sandbox loads nothing over the network.
+    expect(html).toContain('srcdoc: html');
+    expect(html).not.toMatch(/iframe[^)]*src:/);
+  });
+
+  it("answers when the host refuses to open the preview address, instead of going quiet", () => {
+    const html = panelHtml();
+    // openLink resolves with isError rather than throwing; the old handler ignored the result.
+    expect(html).toContain('if (r && r.isError) setStatus(');
+    expect(html).toContain('await app.openLink({ url: draft.previewUrl })');
+    // And the address is on the page whatever the host does.
+    expect(html).toContain('In a browser: ');
+    expect(html).toContain('the preview server did not start');
   });
 
   it("exposes the library's App once the library has run", () => {

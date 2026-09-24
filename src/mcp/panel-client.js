@@ -2,7 +2,6 @@
 // It talks to the newsletter server only through the host (callServerTool), so every change goes
 // through the same tools and rules as the chat. It never builds HTML from data: every value is set
 // with textContent, so a title from a source cannot inject markup.
-/* global document */
 const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } = globalThis.__mcpApps;
 
 const app = new App({ name: "Volta newsletter review", version: "1.0.0" });
@@ -159,8 +158,27 @@ function editForm(it) {
     it.edited.length ? el("button", { type: "button", onclick: async () => {
       for (const field of it.edited) if (!(await call("edit_item", { item_id: it.id, field, clear: true }))) return;
       await refresh();
-    } }, "Back to the source's wording") : null));
+    } }, "Back to the source's wording") : null,
+    // Only on events Bader added: an item from a source is unticked, never deleted.
+    it.manual ? removeButton(it) : null));
   return form;
+}
+
+/**
+ * Removing takes two clicks: the first arms the button, the second does it. A browser dialog would
+ * be the obvious way to ask, but this frame is sandboxed and the host need not allow modals, so a
+ * silently ignored confirm would either delete without asking or never delete at all.
+ */
+function removeButton(it) {
+  const b = el("button", { type: "button", onclick: async () => {
+    if (b.className !== "danger") {
+      b.className = "danger";
+      b.textContent = "Really remove it?";
+      return;
+    }
+    if (await call("remove_event", { item_id: it.id, confirm: true })) await refresh();
+  } }, "Remove this event");
+  return b;
 }
 
 function addEventForm() {
@@ -178,9 +196,65 @@ function addEventForm() {
   } },
   ...input("title", "Title", "text"), ...input("date", "Date", "date"), ...input("time", "Time", "time"),
   ...input("location", "Location (optional)", "text"), ...input("description", "Description (optional)", "textarea"),
-  ...input("link", "Link (optional)", "url"), ...input("image", "Image: https link or file path (optional)", "text"),
+  // A text box, not type="url": the browser would refuse "www.eventbrite.com" with its own bubble
+  // before the form was ever sent, and say nothing useful. The server fills in the scheme and has
+  // a sentence to give back when it really cannot be read. The edit form already does it this way.
+  ...input("link", "Link (optional)", "text"), ...input("image", "Image: https link or file path (optional)", "text"),
   el("button", { type: "submit" }, "Add the event"));
   return el("details", { class: "add" }, el("summary", {}, "Add an event"), form);
+}
+
+/**
+ * The newsletter, shown in the panel itself.
+ *
+ * "Open preview" used to hand the preview server's address to the host and hope. The host will not
+ * open `http://127.0.0.1:3111/...` — its capability is for opening *external* links — and openLink
+ * reports that by resolving with isError rather than throwing, which the old handler discarded. So
+ * the button did nothing and said nothing.
+ *
+ * Reading the draft as a resource and showing it here needs nothing from the host, so it works the
+ * same in dry run on this laptop as it would hosted. Opening it in a real browser stays available
+ * as well: that is the path that works once PUBLIC_URL makes the address an external https one.
+ */
+const PREVIEW_URI = "ui://volta-newsletter/current-draft.html";
+
+function previewBox() {
+  return el("div", { id: "preview" });
+}
+
+async function showPreview() {
+  const box = document.getElementById("preview");
+  if (!box) return;
+  if (box.firstChild) {
+    box.replaceChildren();
+    return;
+  }
+  setStatus("Rendering the newsletter…");
+  try {
+    const r = await app.readServerResource({ uri: PREVIEW_URI });
+    const html = (r.contents || []).map((c) => c.text || "").join("");
+    if (!html) {
+      setStatus("There is no built draft to show yet. Build it first.", true);
+      return;
+    }
+    // srcdoc, not src: the frame carries the document with it, so nothing is loaded over the
+    // network from a sandbox that forbids exactly that.
+    box.replaceChildren(el("iframe", { class: "preview", srcdoc: html, sandbox: "", title: "The newsletter as it will look" }));
+    setStatus("");
+  } catch (e) {
+    setStatus(`The newsletter could not be shown here: ${(e && e.message) || e}`, true);
+  }
+}
+
+async function openPreview() {
+  try {
+    const r = await app.openLink({ url: draft.previewUrl });
+    // The host says no by answering, not by throwing. Saying nothing is what made this look broken.
+    if (r && r.isError) setStatus(`This app would not open ${draft.previewUrl}. Use "Show the newsletter", or paste that address into a browser.`, true);
+    else setStatus("");
+  } catch (e) {
+    setStatus(`${draft.previewUrl} could not be opened: ${(e && e.message) || e}`, true);
+  }
 }
 
 function buildBar() {
@@ -188,10 +262,17 @@ function buildBar() {
   if (draft) out.append(
     el("div", {}, el("strong", {}, "Draft: "), draft.subject),
     ...draft.notes.filter(Boolean).map((n) => el("div", { class: "note" }, n.replace(/\*\*/g, ""))),
+    previewBox(),
     el("div", { class: "row" },
-      draft.previewUrl ? el("button", { type: "button", onclick: () => app.openLink({ url: draft.previewUrl }) }, "Open preview") : null,
+      el("button", { type: "button", onclick: showPreview }, "Show the newsletter"),
+      draft.previewUrl ? el("button", { type: "button", onclick: openPreview }, "Open in a browser") : null,
       el("button", { type: "button", onclick: () => app.sendMessage({ role: "user", content: [{ type: "text", text: `Show me the draft I just built in the panel (draft key ${draft.key}) exactly as it is, with its preview link.` }] }) }, "Show it in the chat"),
-      el("button", { type: "button", onclick: () => app.sendMessage({ role: "user", content: [{ type: "text", text: `I'd like to approve the draft I built in the panel (draft key ${draft.key}). Please confirm with me first.` }] }) }, "Approve…")));
+      el("button", { type: "button", onclick: () => app.sendMessage({ role: "user", content: [{ type: "text", text: `I'd like to approve the draft I built in the panel (draft key ${draft.key}). Please confirm with me first.` }] }) }, "Approve…")),
+    // Always shown, never only on failure: a status line is wiped by the next refresh, and an
+    // address he can read and copy is the one thing that works whatever the host allows.
+    draft.previewUrl
+      ? el("div", { class: "note" }, "In a browser: ", el("code", { class: "addr" }, draft.previewUrl))
+      : el("div", { class: "note" }, "There is no preview address this time: the preview server did not start. \"Show the newsletter\" still works."));
   return el("div", { class: "actions" },
     el("button", { type: "button", class: "primary", onclick: async () => {
       const r = await call("build_draft", {});

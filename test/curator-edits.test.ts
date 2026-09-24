@@ -49,12 +49,15 @@ describe("checking an edit before it is saved", () => {
     expect(normalizeEdit(mixer, "summary", "  Drinks,   demos and the fall cohort. ", TZ)).toEqual({ value: "Drinks, demos and the fall cohort." });
     expect(normalizeEdit(mixer, "location", "Volta, 1505 Barrington St", TZ)).toEqual({ value: "Volta, 1505 Barrington St" });
     expect(normalizeEdit(mixer, "link", "https://lu.ma/mixer", TZ)).toEqual({ value: "https://lu.ma/mixer" });
+    // A link fixed after the event was added is typed the same way it is typed on the add form.
+    expect(normalizeEdit(mixer, "link", "lu.ma/mixer", TZ)).toEqual({ value: "https://lu.ma/mixer" });
+    expect(normalizeEdit(mixer, "link", " www.eventbrite.ca/e/1 ", TZ)).toEqual({ value: "https://www.eventbrite.ca/e/1" });
     expect(normalizeEdit(mixer, "starts_at", "2026-10-23 19:00", TZ)).toEqual({ value: "2026-10-23T22:00:00.000Z" }); // 19:00 ADT
   });
 
   it("refuses what cannot be right, saying what to do instead", () => {
     expect(normalizeEdit(mixer, "summary", "   ", TZ)).toEqual({ error: expect.stringMatching(/clear the edit instead/) });
-    expect(normalizeEdit(mixer, "link", "lu.ma/mixer", TZ)).toEqual({ error: expect.stringMatching(/https:\/\//) });
+    expect(normalizeEdit(mixer, "link", "a link to the page", TZ)).toEqual({ error: expect.stringMatching(/https:\/\//) });
     expect(normalizeEdit(mixer, "starts_at", "Oct 23 7pm", TZ)).toEqual({ error: expect.stringMatching(/YYYY-MM-DD HH:MM/) });
     expect(normalizeEdit(mixer, "starts_at", "2026-02-30 19:00", TZ)).toEqual({ error: "2026-02-30 is not a real date." });
     expect(normalizeEdit(story, "location", "Volta", TZ)).toEqual({ error: "only an event has a location" });
