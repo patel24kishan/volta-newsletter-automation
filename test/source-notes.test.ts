@@ -177,3 +177,44 @@ describe("nothing a developer wrote reaches Bader", () => {
       .toMatch(/probably a typo/);
   });
 });
+
+describe("warnings that must reach Bader", () => {
+  // Every string below is copied from a fetcher, and every one means an item was lost. The filter
+  // used to match only "were skipped", so a founder update dropped for a missing permalink was
+  // silent while its source still reported "ok" -- the same silence that once put ten empty
+  // LinkedIn posts into a live campaign.
+  it("says so whenever an item was skipped, however the fetcher worded it", () => {
+    for (const w of [
+      "could not get a permalink for the Kelpwise update, so it was skipped", // slack-channel.ts
+      "skipped event without SUMMARY or UID", // ics.ts
+      'skipped event with unparseable DTSTART: "Demo"', // ics.ts
+      'skipped event without URL and no fallback_link configured: "Demo"', // ics.ts
+      "skipped post with unparseable date: https://li.test/p", // linkedin.ts
+      'skipped item without title or absolute link: "x"', // rss.ts
+      'skipped item without a parseable pubDate: "x"', // rss.ts
+      "3 message(s) had no link and were skipped", // slack-channel.ts
+    ]) {
+      expect(worthSaying(w), w).toBe(true);
+    }
+  });
+
+  it("stays quiet about a source doing its job", () => {
+    // Nothing was lost: the filter kept what it was told to, and the event still carries a link.
+    expect(worthSaying("12 item(s) dropped as off-topic for this source")).toBe(false);
+    expect(worthSaying('event has no URL, linked to fallback: "Demo"')).toBe(false);
+  });
+
+  it("explains a source whose every item fell outside the window, whatever it calls them", () => {
+    // The calendar counts events and LinkedIn counts posts; only "item(s)" used to be understood,
+    // so those two were told "that can be normal for a quiet month" instead of the real reason.
+    for (const w of [
+      "51 item(s) outside the window (2026-08-01 to 2026-09-24)",
+      "12 post(s) outside the window (2026-08-01 to 2026-09-24)",
+      "30 event(s) outside the window (held 2026-08-01 to 2026-09-24, or coming 2026-09-24 to 2026-10-01)",
+    ]) {
+      const r = remedyFor({ id: "s", status: "empty", warnings: [w] }, { periodWord: "month" });
+      expect(r, w).toMatch(/but they were all outside the dates/);
+      expect(r, w).not.toMatch(/normal for a quiet month/);
+    }
+  });
+});

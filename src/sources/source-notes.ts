@@ -109,7 +109,7 @@ export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; k
     // and it is the likeliest thing to happen the first time Bader adds a feed of his own.
     // Everything it published was outside the span this period reads. Telling him to change his
     // search words would send him after the wrong thing entirely.
-    const outside = countIn(note.warnings ?? [], /^(\d+) item\(s\) outside the window(?: \((.*)\))?/);
+    const outside = countIn(note.warnings ?? [], /^(\d+) (?:item|post|event)\(s\) outside the window(?: \((.*)\))?/);
     if (outside.count) {
       return `It published ${outside.count} item(s), but they were all outside the dates this ${o.periodWord ?? "period"} reads${outside.detail ? ` (${outside.detail})` : ""}. Nothing to do unless you expected something newer.`;
     }
@@ -164,5 +164,10 @@ export function explainSourceNote(
 export function worthSaying(warning: string): boolean {
   // Deliberately not "dropped as off-topic": a source doing its filtering job is not a problem, and
   // when everything it published was dropped the explanation already says so, in numbers.
-  return /fell back|markup may have changed|no JSON-LD|came with no text|link\(s\) could not be fetched|more messages in the window than could be read|may be missing|were skipped|unknown TZID|broke/i.test(warning);
+  //
+  // "skipped", not "were skipped": every fetcher writes it differently -- "skipped item without
+  // title", "so it was skipped", "were skipped" -- and the narrow pattern matched only the last.
+  // A whole founder update could be dropped for a missing permalink while the source still
+  // reported "ok" and Bader heard nothing. Every "skipped" warning means an item was lost.
+  return /fell back|markup may have changed|no JSON-LD|came with no text|link\(s\) could not be fetched|more messages in the window than could be read|may be missing|skipped|unknown TZID|broke/i.test(warning);
 }

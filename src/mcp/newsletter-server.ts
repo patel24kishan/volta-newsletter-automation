@@ -498,7 +498,16 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     try {
       const r = await approve(st, draft_key);
       switch (r.status) {
-        case "missing": return text("That draft is no longer current (a newer one was built). Build again and approve the new key.", true);
+        // It used to answer every unknown key with "a newer one was built" — a confident, specific
+        // diagnosis that is simply false when the key was mistyped or came from a previous run, and
+        // it sent Bader off to rebuild a draft that was fine. Only one draft is ever kept, so why
+        // his key does not match cannot be known; what can be said is what is actually there.
+        case "missing": {
+          const draft = currentDraft(st);
+          return text(draft
+            ? `That key does not match the draft I have. This ${periodWord}'s draft is ${draft.key} — approve that one, or build again if anything has changed since.`
+            : `Nothing has been built for this ${periodWord} yet, so there is no draft to approve. Build one with build_draft first.`, true);
+        }
         case "saved": return text(`Approved and saved to ${r.files.html}. No email platform is configured, so nothing was created there.`);
         case "failed": return text(`Saved to ${r.files.html}, but creating the ${r.platform} campaign failed: ${r.error.message}`, true);
         case "already": return text(`Already approved. Campaign ${r.campaign.id} in ${r.campaign.platform}: ${r.campaign.editUrl}`);

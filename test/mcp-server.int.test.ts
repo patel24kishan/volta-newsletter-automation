@@ -221,7 +221,15 @@ describe("the newsletter tools, as Claude uses them", () => {
     await c.call("prepare_month");
     const first = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
     const second = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
-    expect((await c.call("approve_draft", { draft_key: first })).text).toMatch(/no longer current/);
+    // A superseded key is refused, and told which key to use rather than just that it is stale.
+    const stale = await c.call("approve_draft", { draft_key: first });
+    expect(stale.isError).toBe(true);
+    expect(stale.text).toContain("does not match the draft I have");
+    expect(stale.text).toContain(second);
+    // A key that never existed gets the same true answer, not a claim that a newer one was built.
+    const bogus = await c.call("approve_draft", { draft_key: "00000000-0000-0000-0000-000000000000" });
+    expect(bogus.text).toContain("does not match the draft I have");
+    expect(bogus.text).not.toContain("a newer one was built");
     const ok = await c.call("approve_draft", { draft_key: second });
     expect(ok.text).toMatch(/Campaign camp_1 created in Mailchimp \(not sent\)[\s\S]*Audience: Test \(2 contacts\)/);
     expect((await c.call("approve_draft", { draft_key: second })).text).toMatch(/Already approved/);
