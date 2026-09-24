@@ -186,3 +186,44 @@ describe("recorded Volta calendar snapshot (test/fixtures/volta-calendar.ics)", 
     }
   });
 });
+
+describe("the id an event keeps", () => {
+  const clock = resolveClock(["--now=2026-09-15T12:00:00Z"], {});
+  const fetcher = new IcsFetcher();
+  const one = (uid: string, o: { url?: string; start?: string; summary?: string } = {}) =>
+    cal(ev({ uid, summary: o.summary ?? "Yoga", start: o.start ?? "20260920T150000Z", url: o.url ?? "https://e.test/yoga" }));
+
+  it("survives a feed that issues a new UID every time it is served", async () => {
+    // Volta's calendar does exactly this. Keying the id on the UID meant the same event came back
+    // with a different id on every fetch, so the curator's ticks matched nothing and were dropped
+    // and his edits were orphaned. One Yoga event had 22 ids before this was found.
+    const a = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("uid-first-fetch") });
+    const b = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("uid-SECOND-fetch") });
+    expect(a.items).toHaveLength(1);
+    expect(b.items[0]!.id).toBe(a.items[0]!.id);
+    // The UID is still carried, as the reference back to the calendar entry it came from.
+    expect(a.items[0]!.source_ref).toBe("uid-first-fetch");
+    expect(b.items[0]!.source_ref).toBe("uid-SECOND-fetch");
+  });
+
+  it("still tells two events apart, including when they share a fallback link", async () => {
+    const at = async (start: string, url?: string) =>
+      (await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("u", { start, ...(url ? { url } : {}) }) })).items[0]!.id;
+    // Same link, different times: a recurring event is a different occurrence each time.
+    expect(await at("20260920T150000Z")).not.toBe(await at("20260921T150000Z"));
+    // No URL of their own, so both fall back to the events page; the start still separates them.
+    const noUrl = async (start: string) =>
+      (await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => cal(ev({ uid: "u", summary: "No link", start })) })).items[0]!.id;
+    expect(await noUrl("20260920T150000Z")).not.toBe(await noUrl("20260922T150000Z"));
+  });
+
+  it("changes only when the event itself moves, not when the feed is rewritten", async () => {
+    const base = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("u1") });
+    // A retitled event is the same event: the curator's tick and his wording stay attached.
+    const retitled = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("u2", { summary: "Yoga (all levels)" }) });
+    expect(retitled.items[0]!.id).toBe(base.items[0]!.id);
+    // Rescheduled is not: it is a different occurrence, and worth him looking at again.
+    const moved = await fetcher.fetch(source, { config: cfg(), clock, fetchText: async () => one("u3", { start: "20260921T150000Z" }) });
+    expect(moved.items[0]!.id).not.toBe(base.items[0]!.id);
+  });
+});

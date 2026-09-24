@@ -90,7 +90,13 @@ export class IcsFetcher implements Fetcher {
       const location = stripHtml(ev.LOCATION?.value ?? "");
       const summary = firstSentences(description, 2, 280);
       const item: Item = {
-        id: itemId(source.id, `${uid}@${link}`),
+        // Keyed by the event, not by the feed's idea of it. Volta's calendar issues a fresh UID
+        // every time it is served, so an id built from the UID changed on every fetch: the
+        // curator's ticks stopped matching any candidate and were dropped, and his edits — keyed
+        // by item id — were orphaned, reverting his wording to the source's without a word. One
+        // Yoga event had accumulated 22 ids. The link and the start time are what the feed keeps
+        // stable, and together they separate two events that share a fallback link.
+        id: itemId(source.id, `${link}@${start.toISOString()}`),
         source: source.id,
         type: source.type,
         date: start.toISOString(),

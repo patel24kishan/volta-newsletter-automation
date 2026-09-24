@@ -736,6 +736,35 @@ describe("a refresh, as Bader sees it afterwards", () => {
     }
   });
 
+  it("keeps his ticks and his wording when the calendar reissues its UIDs", async () => {
+    // The promise prepare_month makes: "fetches again; Bader's edits and added events are kept".
+    // Volta's calendar serves a fresh UID for the same event every time, so an id built from the
+    // UID broke that promise on every refresh, silently.
+    const saved = BODIES["https://cal.test/ics"]!;
+    try {
+      const c = await connect();
+      await c.call("prepare_month");
+      const mixer = /id: (volta-calendar:[^\s)]+)/.exec((await c.call("list_candidates")).text)?.[1];
+      expect(mixer, "a calendar event should be listed").toBeDefined();
+
+      await c.call("set_selection", { tick: [mixer!] });
+      await c.call("edit_item", { item_id: mixer!, field: "summary", text: "Bader's own words about the mixer." });
+
+      // The same calendar, served again with every UID rewritten.
+      BODIES["https://cal.test/ics"] = saved.replace(/UID:(\w+)/g, "UID:$1-reissued");
+      await c.call("prepare_month", { force: true });
+
+      const after = await c.call("list_candidates");
+      expect(after.text, "the same event, under the same id").toContain(mixer!);
+      expect(after.text).toContain("[x]");
+      expect(after.text).toContain("Bader's own words about the mixer.");
+      expect(after.text).toContain("edited by Bader: description");
+      await c.close();
+    } finally {
+      BODIES["https://cal.test/ics"] = saved;
+    }
+  });
+
   it("says a source's trouble once, however many warnings mean the same thing", async () => {
     BODIES["https://li.test/company"] = BARE_LI;
     try {
