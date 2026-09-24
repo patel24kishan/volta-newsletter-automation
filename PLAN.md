@@ -32,6 +32,96 @@ Not built. Each stays out of the pipeline until picked up; nothing here changes 
 4. **Local web curation page (D10).** The plan's fallback surface for when Slack isn't available.
    Slack (D9) was built and is the working surface; the plain web page was never started.
 
+5. **Google Keep as a source for Bader's own notes.** Raised 2026-09-24: Bader jots things down
+   through the month — an event he heard about, a member win — and today they only exist if he
+   retypes them into Claude. Parked, not abandoned: branch `add-keep-notes-src` exists, cut from
+   `fix-issues`, with nothing on it yet.
+
+   **The blocker is Google's, not ours.** The Keep API is Google Workspace only. A Keep note has no
+   public address of any kind — sharing is by named collaborator and there is no publish-to-web —
+   so there is no scraping route and no fetch-by-URL route. A personal @gmail.com account cannot be
+   read at all (open request: `issuetracker.google.com/issues/263769283`). Owner decision
+   (2026-09-24): the no-credentials workarounds — a published Google Doc or Sheet, which need no
+   auth whatsoever — are **not** wanted. If Keep is closed, nothing is built and Slack stays.
+
+   **Go/no-go before any code: four questions, about 15 minutes.** Is Bader on Workspace (Business,
+   Enterprise or Education) rather than personal Gmail? Can a super admin enable
+   `keep.googleapis.com` and authorize a service account for domain-wide delegation, which some
+   organisations now require a second super admin to confirm? Will they grant
+   `https://www.googleapis.com/auth/keep.readonly` — a restricted scope, but an app configured
+   **Internal** to Volta's own Workspace needs no Google verification and no CASA assessment, worth
+   saying first because "restricted scope" is what usually ends the conversation. And will Bader
+   title every note meant for the newsletter `Newsletter: …`? The API exposes no labels, so the
+   title is the only way to mark one.
+
+   **Design, decided and ready to build.** `notes.list` filters on `createTime`, so the month's
+   window is applied by Google and fits `windowsOf(ctx)`. Every item needs an absolute link and a
+   note has none, so reuse both mechanisms already here rather than inventing a third:
+   `fallback_link` for the printed link, required for the kind exactly as it is for `manual`, and
+   `message_link` — the curator-only field built for Slack permalinks, never rendered into an
+   email — set to the note's Keep address. Ids must be hashed from the note's resource name, not
+   the shared fallback link, or every note collides. Reuse `terms` for the title prefixes, so no
+   database migration is needed. Credentials are the maintainer's: `GOOGLE_SERVICE_ACCOUNT_FILE`,
+   already named in `.env.example` and so far unread, plus a new `GOOGLE_KEEP_USER`. One new
+   dependency, `google-auth-library`.
+
+   **It must inherit the two guarantees.** A source added before the key exists is saved and left
+   switched **off**, with a message naming what the maintainer must do — the Slack pattern at
+   `src/mcp/newsletter-server.ts:597`, which should be generalised into a `credentialsMissing`
+   helper rather than gaining a second `&&` clause. And no Keep failure can stop the newsletter:
+   the per-source try/catch in `run-week.ts` already covers a throw, but `remedyFor` matches on
+   error strings rather than on kind, so every failure Keep can return needs its own sentence or
+   Bader reads raw developer text.
+
+   **Cost:** no fee for the Keep API itself. The real cost is Volta admin time, and this would be
+   the repository's first authentication code and first Google dependency — for a source only
+   Bader writes into, when `add_event` already takes an item in one sentence. The win is narrow but
+   real: capture on his phone, away from Claude.
+
+   Build order when picked up, one feature per turn: the kind and its plumbing (`SourceKind`,
+   the `validateSource` branch, `toSourceConfig`, `KIND_LABEL`, `sourceFromFields`, `readsWhat`,
+   `sourceLink`); then the fetcher, injected through a `keepApi?` hook on `FetchContext` following
+   the `slackApi` precedent; then the walkthrough and the failure wording.
+
+## Remaining work on the Claude redesign (phases 4–6)
+
+Bader's review moved out of Slack and into the Claude app, through an MCP server (`src/mcp/`,
+`npm run mcp`). Phases 1–3 are built, pushed and QA'd four times: the surface-free review core, the
+fourteen tools, and the monthly scheduled task. Three phases remain, none started.
+
+### Phase 4: the install package for Bader
+
+Half of it exists. `bin/add-to-claude-config.mjs` writes a `claude_desktop_config.json` entry,
+which is what we install for testing. Nothing exists for the `.mcpb` Desktop Extension: no
+manifest, no bundle, no `user_config` entries for the Mailchimp key, list id, reply-to address and
+Slack token, no install-time creation of the monthly reminder task, and no way to carry his
+database across an update.
+
+Two things to check before building any of it: whether the Microsoft Store build of Claude supports
+extensions at all, and whether a scheduled run raises a desktop notification — the whole monthly
+trigger rests on Bader noticing one. Note also that the settings form holds flat values only, so
+sources stay where they are, added in chat.
+
+**Settle `catch_up_days` first.** It is a config setting (1–31, default 7) added for the September
+demo and since put back to 7 in `demo/config.json`. At 31 a month's reminder would go on catching
+up into the following month and could overlap the next one. Decide whether Bader's packaged install
+exposes the setting at all or fixes it at 7.
+
+### Phase 5: retire the Slack review surface
+
+Still present, and unused by the Claude path: `src/surface/slack.ts`, `blocks.ts`, `mrkdwn.ts`,
+`serial.ts`, `src/cli/demo-slack.ts`, `serve.ts`, `start-surface.ts`, the Slack-sending parts of
+`scheduler.ts`, and `@slack/bolt`. `.env.example` still names `SLACK_APP_TOKEN` and
+`SLACK_BADER_USER_ID`. The `slack-channel` fetcher stays either way — it is a source, not a
+surface. Deliberately last, so nothing is deleted before the Claude path is proven in real use.
+
+### Phase 6: the rules file
+
+`README.md` is done. `CLAUDE.md` still needs, with the owner's approval: constraint 4 to name the
+scheduled task and Claude rather than "a reminder reaches Bader"; section 7 to list `npm run mcp`;
+a new rule that Claude must never be given a tool that accepts newsletter text, which is true in
+the code and unwritten in the rules; and section 1, which still calls the project "Weekly".
+
 ---
 
 ## Context
