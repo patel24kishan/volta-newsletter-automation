@@ -39,6 +39,13 @@ export interface DraftOptions {
    */
   now?: Date;
   /**
+   * The section headings this period had something to offer for, whether or not it was chosen
+   * (see `offeredSections`). A section with nothing in it says "nothing this month" only when that
+   * is true; when there were items and none were used, the section is left out instead. Absent
+   * means the old behaviour: every empty section states that nothing happened.
+   */
+  offered?: string[];
+  /**
    * Where an item's image is loaded from: its https link as it is, a local file as an inline
    * preview or, once approved, the email platform's hosted copy. Returning undefined leaves the
    * image out. By default only https images are shown.
@@ -194,10 +201,33 @@ export function periodLabel(o: Pick<DraftOptions, "cadence" | "period">): string
 }
 
 function section(title: string, list: Item[], render: (it: Item) => Block, o: DraftOptions): Block[] {
+  // Empty because there was nothing to choose is worth saying; empty because none of what there
+  // was got chosen is not. Volta's LinkedIn is read every month but hands back only links, so its
+  // posts are all held and none can be ticked — and the newsletter told subscribers "Nothing from
+  // Volta on LinkedIn this month" while nine posts sat in the list. A heading left out says
+  // nothing; a heading kept says something, and it has to be true.
+  if (list.length === 0 && o.offered?.includes(title)) return [];
   const blocks: Block[] = [{ kind: "h2", text: title }];
   if (list.length === 0) blocks.push({ kind: "p", text: P.none(title, cadence(o)) });
   else for (const it of list) blocks.push(render(it));
   return blocks;
+}
+
+/**
+ * The section headings this period had something to offer for, chosen or not — what `offered`
+ * expects. It groups the candidates with the very function that groups the newsletter, so the two
+ * cannot drift into disagreeing about which heading an item belongs under.
+ */
+export function offeredSections(candidates: Item[], now?: Date): string[] {
+  const g = groupItems(candidates, now);
+  return [
+    ...(g.events.length ? [T.events] : []),
+    ...(g.pastEvents.length ? [T.pastEvents] : []),
+    ...(g.news.length ? [T.news] : []),
+    ...(g.linkedin.length ? [T.linkedin] : []),
+    ...(g.members.length ? [T.insights] : []),
+    ...(g.ceo.length ? [T.ceo] : []),
+  ];
 }
 
 /**

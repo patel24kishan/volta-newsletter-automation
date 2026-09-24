@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDrafts, HTML_CHROME, MERGE_TAGS, whenLine } from "../src/draft/templates.js";
+import { buildDrafts, HTML_CHROME, MERGE_TAGS, offeredSections, whenLine } from "../src/draft/templates.js";
 import { itemFromManualEvent } from "../src/manual-events.js";
 import { sampleItem } from "./helpers.js";
 
@@ -231,5 +231,40 @@ describe("the order items print in", () => {
     const d = buildDrafts([held("Summer Summit", "2026-09-03T18:00:00Z"), held("Demo Night", "2026-09-17T22:00:00Z")], opts)[0]!;
     expect(d.verification.violations).toEqual([]);
     expect(d.markdown.indexOf("Demo Night")).toBeLessThan(d.markdown.indexOf("Summer Summit"));
+  });
+});
+
+describe("what an empty section says", () => {
+  // The real case: Volta's LinkedIn is read every month, but the page hands back links without the
+  // posts' words, so every item is held and none can be ticked. The newsletter used to tell
+  // subscribers "Nothing from Volta on LinkedIn this month" while nine posts sat in the list.
+  const opts = { timeZone: TZ, cadence: "monthly" as const, period: "2026-09", layouts: ["standard" as const] };
+
+  it("says nothing happened only when there was nothing to choose", () => {
+    const md = buildDrafts([mixer], { ...opts, offered: ["Upcoming events"] })[0]!.markdown;
+    expect(md).toContain("No news to report this month.");
+    expect(md).toContain("Nothing from Volta on LinkedIn this month.");
+  });
+
+  it("leaves the heading out when there were items and none were used", () => {
+    // The month offered LinkedIn posts and news; only the event was ticked.
+    const md = buildDrafts([mixer], { ...opts, offered: ["Upcoming events", "In the news", "From Volta on LinkedIn"] })[0]!.markdown;
+    expect(md).not.toContain("Nothing from Volta on LinkedIn");
+    expect(md).not.toContain("From Volta on LinkedIn");
+    expect(md).not.toContain("No news to report");
+    expect(md).not.toContain("In the news");
+    // The section that does have something is untouched.
+    expect(md).toContain("## Upcoming events");
+    expect(md).toContain("AI Showcase and Mixer");
+  });
+
+  it("is unchanged when nothing is known about what the month offered", () => {
+    const md = buildDrafts([mixer], opts)[0]!.markdown;
+    expect(md).toContain("Nothing from Volta on LinkedIn this month.");
+  });
+
+  it("reports the headings a period had something for, chosen or not", () => {
+    expect(offeredSections([mixer, post, news])).toEqual(["Upcoming events", "In the news", "From Volta on LinkedIn"]);
+    expect(offeredSections([])).toEqual([]);
   });
 });

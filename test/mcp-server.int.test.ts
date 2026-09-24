@@ -711,6 +711,31 @@ describe("a refresh, as Bader sees it afterwards", () => {
     }
   });
 
+  it("leaves the LinkedIn heading out rather than telling subscribers nothing was posted", async () => {
+    BODIES["https://li.test/company"] = BARE_LI;
+    try {
+      const c = await connect();
+      await c.call("add_source", { kind: "linkedin_company", url: "https://li.test/company", name: "Volta on LinkedIn", check: false });
+      await c.call("prepare_month", { force: true });
+
+      // The post is there, and held, because LinkedIn gave a link and no words. Held items are
+      // never pre-ticked, so the section has nothing in it.
+      const list = await c.call("list_candidates");
+      expect(list.text).toContain("MARKED FOR REVIEW");
+      expect(list.text).toMatch(/LinkedIn gave only the link/);
+
+      const built = await c.call("build_draft");
+      // It would be false to say nothing was posted, so the heading is simply absent.
+      expect(built.text).not.toContain("Nothing from Volta on LinkedIn");
+      expect(built.text).not.toContain("From Volta on LinkedIn");
+      // And nothing else was swallowed: the news section has items, so it still prints them.
+      expect(built.text).toContain("## In the news");
+      await c.close();
+    } finally {
+      delete BODIES["https://li.test/company"];
+    }
+  });
+
   it("says a source's trouble once, however many warnings mean the same thing", async () => {
     BODIES["https://li.test/company"] = BARE_LI;
     try {

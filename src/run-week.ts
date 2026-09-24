@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Alerter } from "./alerts.js";
 import { localDateString, type Clock } from "./clock.js";
 import { cadenceOf, type Cadence, type Config } from "./config.js";
-import { buildDrafts, type Draft } from "./draft/templates.js";
+import { buildDrafts, offeredSections, type Draft } from "./draft/templates.js";
 import { fetcherFor } from "./fetchers/index.js";
 import { effectiveSources } from "./sources/curator-sources.js";
 import { keepRelevant } from "./sources/relevance.js";
@@ -139,6 +139,9 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   const drafts = buildDrafts(preselected, {
     timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config),
     period: periodOf(now, config).key, now,
+    // Everything the month had, not just the pre-ticked few: an empty section then says "nothing
+    // this month" only when that is true.
+    offered: offeredSections(candidates.map((c) => c.item), now),
   });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {

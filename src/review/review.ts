@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Alerter } from "../alerts.js";
-import { buildDrafts, type Draft, type DraftOptions } from "../draft/templates.js";
+import { buildDrafts, offeredSections, type Draft, type DraftOptions } from "../draft/templates.js";
 import { isManualItem, itemFromManualEvent, manualEventFromFields, MANUAL_REF_PREFIX, validateManualEvent, type ManualEventErrors, type ManualEventFields } from "../manual-events.js";
 import { rankItems, type RankedItem } from "../pipeline/rank.js";
 import type { Violation } from "../pipeline/verify.js";
@@ -41,10 +41,13 @@ function now(st: ReviewState): Date {
  * does. Both builds here go through this, or the email rebuilt at Approve could disagree with the
  * one that was previewed.
  */
-function draftOptions(st: ReviewState): Pick<DraftOptions, "timeZone" | "cadence" | "period" | "now"> {
+function draftOptions(st: ReviewState): Pick<DraftOptions, "timeZone" | "cadence" | "period" | "now" | "offered"> {
   return {
     timeZone: st.timeZone,
     now: now(st),
+    // Everything this period had, not just what he ticked, so an empty section can tell "there was
+    // nothing" from "he used none of it".
+    offered: offeredSections(withEdits(st, st.candidates.map((c) => c.item)), now(st)),
     ...(st.cadence ? { cadence: st.cadence } : {}),
     ...(st.week ? { period: st.week } : {}),
   };
