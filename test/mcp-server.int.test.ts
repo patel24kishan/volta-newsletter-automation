@@ -123,9 +123,8 @@ describe("the newsletter tools, as Claude uses them", () => {
     const demo = first.structuredContent.groups[1]!.items.find((i) => i.title === "Demo Night")!;
     expect(demo.ticked).toBe(false);
 
-    // What the panel does when a box is ticked: set the selection, then read the list again.
-    const ticked = first.structuredContent.groups.flatMap((g) => g.items).filter((i) => i.ticked).map((i) => i.id);
-    await c.client.callTool({ name: "set_selection", arguments: { select: [...ticked, demo.id] } });
+    // What the panel does when a box is ticked: send that one change, then read the list again.
+    await c.client.callTool({ name: "set_selection", arguments: { tick: [demo.id] } });
     const after = (await c.client.callTool({ name: "list_candidates", arguments: {} })) as unknown as typeof first;
     expect(after.structuredContent.ticked).toBe(first.structuredContent.ticked + 1);
     expect(after.structuredContent.groups[1]!.items.find((i) => i.id === demo.id)!.ticked).toBe(true);
@@ -141,6 +140,39 @@ describe("the newsletter tools, as Claude uses them", () => {
     const html = String((shown.contents[0] as { text: string }).text);
     expect(html).toContain("<html");
     expect(html).toContain(built.structuredContent.subject);
+    await c.close();
+  });
+
+  /**
+   * Asking for one group narrows the panel too, and Claude can do that in the chat without Bader
+   * asking. A tick sent from that view as "the selection is now exactly these" unticked everything
+   * off screen: three ticked items became one, silently, with the pre-ticked list unrecoverable.
+   */
+  it("keeps the items it is not showing when a box is ticked in a narrowed panel", async () => {
+    const c = await connect();
+    await c.call("prepare_month");
+    type Panel = { structuredContent: { ticked: number; total: number; showing?: string; groups: Array<{ key: string; title: string; items: Array<{ id: string; title: string; ticked: boolean }> }> } };
+    const list = async (args: Record<string, unknown>) => (await c.client.callTool({ name: "list_candidates", arguments: args })) as unknown as Panel;
+
+    const all = await list({});
+    expect(all.structuredContent.ticked).toBe(2);
+
+    // "Just show me the upcoming events."
+    const upcoming = await list({ group: "upcoming" });
+    expect(upcoming.structuredContent.groups.map((g) => g.key)).toEqual(["upcoming"]);
+    expect(upcoming.structuredContent.showing).toBe("upcoming");
+    // The counts still describe the whole month, which is why the panel has to say it is narrowed.
+    expect(upcoming.structuredContent).toMatchObject({ ticked: 2, total: 3 });
+
+    const mixer = upcoming.structuredContent.groups[0]!.items.find((i) => i.title === "Fall Mixer")!;
+    expect(mixer.ticked).toBe(true);
+    await c.client.callTool({ name: "set_selection", arguments: { untick: [mixer.id] } });
+
+    const after = await list({});
+    expect(after.structuredContent.ticked).toBe(1);
+    const news = after.structuredContent.groups.find((g) => g.key === "other")!.items[0]!;
+    expect(news.title).toBe("Volta opens applications for its fall cohort");
+    expect(news.ticked).toBe(true);
     await c.close();
   });
 

@@ -8,7 +8,6 @@ const app = new App({ name: "Volta newsletter review", version: "1.0.0" });
 const root = document.getElementById("root");
 let state = null;
 let draft = null;
-let working = false;
 
 // Registered before connecting: the host may send the list's result straight after the handshake.
 app.ontoolresult = (r) => {
@@ -39,15 +38,24 @@ function el(tag, attrs, ...children) {
   return n;
 }
 
+// Kept here as well as on the page: render() replaces #root wholesale, so the node this is written
+// to is thrown away and rebuilt empty. A message about the change that just failed has to outlive
+// the redraw that follows it, or the panel reports its own errors to nobody.
+let status = { message: "", error: false };
+
 function setStatus(message, isError) {
+  status = { message: message || "", error: Boolean(isError) };
+  paintStatus();
+}
+
+function paintStatus() {
   const s = document.getElementById("status");
   if (!s) return;
-  s.textContent = message || "";
-  s.className = isError ? "status error" : "status";
+  s.textContent = status.message;
+  s.className = status.error ? "status error" : "status";
 }
 
 async function call(name, args) {
-  working = true;
   setStatus("Working…");
   try {
     const r = await app.callServerTool({ name, arguments: args });
@@ -61,36 +69,77 @@ async function call(name, args) {
   } catch (e) {
     setStatus(String((e && e.message) || e), true);
     return null;
-  } finally {
-    working = false;
   }
 }
 
-async function refresh() {
-  const r = await call("list_candidates", {});
+/** Reads the list again, keeping whichever group is being shown unless asked for "all". */
+async function refresh(group) {
+  const want = group === undefined ? state && state.showing : group;
+  const r = await call("list_candidates", want && want !== "all" ? { group: want } : {});
   if (r && r.structuredContent) {
     state = r.structuredContent;
     render();
   }
 }
 
-async function saveTicks() {
-  const ids = [...root.querySelectorAll("input.tick:checked")].map((i) => i.value);
-  if (await call("set_selection", { select: ids })) await refresh();
+/**
+ * A tick is sent as the one change it is, never as "the selection is now exactly the boxes I can
+ * see". The panel is often drawing a single group — list_candidates takes one, and Claude can
+ * narrow it in the chat without Bader asking — and a whole-selection save from that view unticked
+ * every item off screen, silently and with no way back to the pre-ticked list.
+ *
+ * Clicks are queued rather than dropped. The old guard ignored a second tick that arrived while the
+ * first was still in flight, which to Bader looked like the box simply refusing to take.
+ */
+let pending = Promise.resolve();
+
+function changeTick(id, checked) {
+  pending = pending.then(() => saveTick(id, checked), () => saveTick(id, checked));
+  return pending;
+}
+
+async function saveTick(id, checked) {
+  if (await call("set_selection", checked ? { tick: [id] } : { untick: [id] })) await refresh();
+  // It did not take: draw the list as the server last gave it, so the box goes back to the truth
+  // rather than showing a change that was never saved. The reason stays on screen.
+  else render();
 }
 
 function render() {
   if (!state) return;
-  root.replaceChildren(
+  // Filtered, not passed straight through: replaceChildren takes nodes or strings, so a null from
+  // showingLine() would be printed to Bader as the word "null". el() does this for its own
+  // children; this is the one place that calls the DOM directly.
+  root.replaceChildren(...[
     el("div", { class: "head" },
       el("strong", {}, `${state.periodLabel} newsletter`),
       el("span", { class: "muted", id: "count" }, `${state.ticked} of ${state.total} ticked`),
       state.dryRun ? el("span", { class: "badge" }, "dry run") : null),
     el("div", { id: "status", class: "status", role: "status", "aria-live": "polite" }),
+    showingLine(),
     ...state.groups.map(group),
     addEventForm(),
     buildBar(),
-  );
+  ].filter(Boolean));
+  paintStatus();
+}
+
+/**
+ * Said out loud whenever one group was asked for. The head counts the whole period while the list
+ * is a part of it, and the two numbers are easily read as one: shown a single group with three
+ * ticked elsewhere, the curator asked where the other two items were. So both scopes are named —
+ * how much of the month is on screen, and that the tick count covers what is not.
+ */
+function showingLine() {
+  if (!state.showing) return null;
+  const title = (state.groups[0] && state.groups[0].title) || "one group";
+  const shown = state.groups.reduce((n, g) => n + g.items.length, 0);
+  const counted = state.ticked === 0
+    ? "Nothing is ticked, in this group or any other."
+    : `${state.ticked === 1 ? "The one ticked item is" : `All ${state.ticked} ticked items are`} counted across every group, including the ones not shown.`;
+  return el("div", { class: "note" },
+    `Showing ${title.toLowerCase()} only — ${shown} of ${state.total} candidates. ${counted} `,
+    el("button", { type: "button", class: "link", onclick: () => refresh("all") }, "Show every group"));
 }
 
 function group(g) {
@@ -103,7 +152,7 @@ function item(it) {
   const editor = el("div", { class: "editor", hidden: true });
   const row = el("li", { class: it.held ? "held" : "" },
     el("label", { class: "line" },
-      el("input", { type: "checkbox", class: "tick", value: it.id, checked: it.ticked, "aria-label": `Include ${it.title}`, onchange: () => { if (!working) saveTicks(); } }),
+      el("input", { type: "checkbox", class: "tick", value: it.id, checked: it.ticked, "aria-label": `Include ${it.title}`, onchange: (e) => changeTick(it.id, e.currentTarget.checked) }),
       el("span", { class: "title" },
         it.held ? el("span", { class: "tag hold" }, "MARKED FOR REVIEW") : null,
         it.title),
@@ -192,7 +241,9 @@ function addEventForm() {
     e.preventDefault();
     const args = { title: f.title.value.trim(), date: f.date.value, time: f.time.value };
     for (const k of ["location", "description", "link", "image"]) if (f[k].value.trim()) args[k] = f[k].value.trim();
-    if (await call("add_event", args)) await refresh();
+    // Widens the view: an added event is always an event, so adding one from a panel narrowed to
+    // the news would otherwise look as though nothing had happened.
+    if (await call("add_event", args)) await refresh("all");
   } },
   ...input("title", "Title", "text"), ...input("date", "Date", "date"), ...input("time", "Time", "time"),
   ...input("location", "Location (optional)", "text"), ...input("description", "Description (optional)", "textarea"),

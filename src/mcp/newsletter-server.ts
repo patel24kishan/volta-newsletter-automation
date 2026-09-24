@@ -817,6 +817,11 @@ export type PanelState = {
   dryRun: boolean;
   ticked: number;
   total: number;
+  /**
+   * The one group asked for, when the list was narrowed to it. The counts above always cover the
+   * whole period, so the panel has to be able to say that what it is drawing is a part of it.
+   */
+  showing?: "upcoming" | "past" | "other";
   groups: Array<{ key: "upcoming" | "past" | "other"; title: string; items: PanelItem[] }>;
 };
 
@@ -858,10 +863,14 @@ export function panelState(st: ReviewState, periodWord: string, timeZone: string
     { key: "past", title: periodWord === "month" ? "Last month's events" : "Past events", items: items(g.pastEvents) },
     { key: "other", title: "News and updates", items: items(g.other) },
   ];
+  // Asking for one group must narrow both what is read out and what the panel shows, or "just
+  // the upcoming events" answers with all forty-four of them. It is named as well as applied: a
+  // panel that is drawing part of the month and says nothing about it is a panel Bader reads as
+  // the whole of it.
+  const only = group && group !== "all" ? groups.find((x) => x.key === group) : undefined;
   return {
     periodLabel, dryRun: !live, ticked: ticked.size, total: st.candidates.length,
-    // Asking for one group must narrow both what is read out and what the panel shows, or "just
-    // the upcoming events" answers with all forty-four of them.
-    groups: group && group !== "all" ? groups.filter((x) => x.key === group) : groups,
+    ...(only ? { showing: only.key } : {}),
+    groups: only ? [only] : groups,
   };
 }
