@@ -10,6 +10,7 @@ import { partsInZone } from "../clock.js";
 import type { Config, SourceConfig, SourceKind } from "../config.js";
 import { isAbsoluteHttpUrl, normalizeLink } from "../schema.js";
 import { curatorSourceId } from "../sources/curator-sources.js";
+import { DEFAULT_BOT } from "../sources/source-notes.js";
 import type { CuratorSource, NewCuratorSource } from "../storage.js";
 
 /** The kinds Bader can add. `manual` is not one: add_event owns the one manual source. */
@@ -142,12 +143,12 @@ export function configKeeps(kind: string, config: Pick<Config, "watchlist">): st
 }
 
 /** Whether a source needs something set up before it can be read, and what to do about it. */
-export function credentialNote(kind: string, env: NodeJS.ProcessEnv): string | undefined {
+export function credentialNote(kind: string, env: NodeJS.ProcessEnv, botName: string = DEFAULT_BOT): string | undefined {
   if (kind === "slack_channel" && !env.SLACK_BOT_TOKEN) {
     return "It cannot be read yet: SLACK_BOT_TOKEN is not set on this computer, which only the maintainer can do. Once it is, say: turn this source back on.";
   }
   if (kind === "slack_channel") {
-    return "Make sure the bot is in that channel: in Slack, type /invite @Volta Newsletter there.";
+    return `Make sure the bot is in that channel: in Slack, type /invite @${botName} there.`;
   }
   if (kind === "linkedin_company") {
     return "LinkedIn is read as a guest, once per run. It sometimes serves a sign-in page instead, and then nothing can be read that month.";
@@ -188,7 +189,7 @@ export function sourceLine(o: {
 function describeConfigSource(s: SourceConfig): string {
   if (s.kind === "google_news") return `a news search for ${(s.terms ?? []).join(" or ")}`;
   if (s.kind === "slack_channel") return `the Slack channel ${s.channel_id ?? ""}`;
-  if (s.kind === "manual") return "events Bader adds himself";
+  if (s.kind === "manual") return "events the curator adds";
   return s.url;
 }
 

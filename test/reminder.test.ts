@@ -20,7 +20,7 @@ function facts(o: Partial<ReminderFacts> = {}): ReminderFacts {
   const candidates = rankItems([mixer, demo, story, held], NOW);
   return {
     now: NOW, timeZone: TZ, cadence: "monthly", periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30", late: false,
-    groups: candidateGroups({ candidates }), ticked: [mixer.id, story.id], sourceNotes: [], ...o,
+    groups: candidateGroups({ candidates }), ticked: [mixer.id, story.id], sourceNotes: [], curator: "Bader", org: "Volta", ...o,
   };
 }
 
@@ -84,12 +84,12 @@ ${line}`);
 
 describe("the other answers", () => {
   it("tells Bader once, plainly, when a month's reminder was missed", () => {
-    expect(missedText({ cadence: "monthly", periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30" }))
+    expect(missedText({ cadence: "monthly", periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30", curator: "Bader" }))
       .toBe('Bader, the reminder for October\'s newsletter was due Thursday 1 October at 08:30 and could not be shown in time, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month\'s newsletter".');
   });
 
   it("explains a quiet day, for the task's log", () => {
-    const f = { cadence: "monthly" as const, periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30" };
+    const f = { cadence: "monthly" as const, periodKey: "2026-10", firstWorkday: fw, reminderTime: "08:30", curator: "Bader" };
     expect(nothingDueText(f, "not-yet")).toBe("October's newsletter is due Thursday 1 October at 08:30.");
     expect(nothingDueText(f, "already-greeted")).toBe("Bader was already reminded about October's newsletter.");
     expect(periodName("2027-07", "monthly")).toBe("July");

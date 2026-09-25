@@ -1,11 +1,11 @@
 /**
- * The monthly reminder's words, built in code rather than left to a prompt, so what Bader reads on
+ * The monthly reminder's words, built in code rather than left to a prompt, so what the curator reads on
  * the first workday is the same every month: the counts per group, what is pre-ticked, and every
- * thing that needs his attention (a source that came back empty or failed, an item on hold) with
+ * thing that needs their attention (a source that came back empty or failed, an item on hold) with
  * the labels exactly as the list shows them.
  *
- * The reminder is triggered by a scheduled task in the Claude app. The tool that calls this decides
- * whether anything is due (src/schedule/scheduler.ts, whatIsDue) and makes sure Bader is greeted
+ * The reminder is triggered by a scheduled task in the Claude app, or by the reminder command. The tool that calls this decides
+ * whether anything is due (src/schedule/scheduler.ts, whatIsDue) and makes sure the curator is greeted
  * once per period; this file only says what the greeting says.
  */
 import { partsInZone } from "../clock.js";
@@ -53,7 +53,14 @@ export interface ReminderFacts {
    * them. Without it, the notes are described here as best they can be (the Slack surface).
    */
   sourceLines?: string[];
+  /** The curator's name, once set; the greeting is to no one in particular until then. */
+  curator?: string | undefined;
+  /** The organisation, for "X is closed". */
+  org?: string | undefined;
 }
+
+type Who = Pick<ReminderFacts, "curator" | "org">;
+const DEFAULT_ORG = "Volta";
 
 /** The first-workday greeting: what is ready, what is ticked, and what needs a look. */
 export function greetingText(f: ReminderFacts): string {
@@ -68,7 +75,7 @@ export function greetingText(f: ReminderFacts): string {
     ...held.map((c) => `- ${REVIEW_LABEL} · ${c.item.title.replace(/[.\s]+$/, "")}${c.item.hold_note ? `. On hold: ${c.item.hold_note}` : ""}${ticked.has(c.item.id) ? " (ticked)" : " (not ticked)"}`),
   ];
   const which = f.cadence === "monthly" ? `${name}'s newsletter` : `The newsletter for ${name}`;
-  const opening = `${greetingFor(f.now, f.timeZone)} Bader. ${which} is prepared.${f.late ? ` This reminder is late: it was due ${dayName(f.firstWorkday)} at ${f.reminderTime}.` : ""}`;
+  const opening = `${greetingFor(f.now, f.timeZone)}${f.curator ? ` ${f.curator}` : ""}. ${which} is prepared.${f.late ? ` This reminder is late: it was due ${dayName(f.firstWorkday)} at ${f.reminderTime}.` : ""}`;
   return [
     opening,
     "",
@@ -87,18 +94,18 @@ export function greetingText(f: ReminderFacts): string {
 
 
 /** Said once, when a period passed with no reminder at all (the computer was off all week, say). */
-export function missedText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime">): string {
+export function missedText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime"> & Who): string {
   const name = periodName(f.periodKey, f.cadence);
-  return `Bader, the reminder for ${name}'s newsletter was due ${dayName(f.firstWorkday)} at ${f.reminderTime} and could not be shown in time, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month's newsletter".`;
+  return `${f.curator ? `${f.curator}, the` : "The"} reminder for ${name}'s newsletter was due ${dayName(f.firstWorkday)} at ${f.reminderTime} and could not be shown in time, so it has stopped trying. Nothing was sent. You can still prepare it now by asking "prepare this month's newsletter".`;
 }
 
-/** Why nothing is said today, for the task's log. Never shown to Bader. */
-export function nothingDueText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime">, reason: "not-yet" | "already-greeted" | "closed" | "missed-already-said"): string {
+/** Why nothing is said today, for the task's log. Never shown to the curator. */
+export function nothingDueText(f: Pick<ReminderFacts, "cadence" | "periodKey" | "firstWorkday" | "reminderTime"> & Who, reason: "not-yet" | "already-greeted" | "closed" | "missed-already-said"): string {
   const name = periodName(f.periodKey, f.cadence);
   switch (reason) {
     case "not-yet": return `${name}'s newsletter is due ${dayName(f.firstWorkday)} at ${f.reminderTime}.`;
-    case "already-greeted": return `Bader was already reminded about ${name}'s newsletter.`;
-    case "closed": return `Volta is closed every workday of ${name}; there is no newsletter.`;
-    case "missed-already-said": return `${name}'s reminder was missed, and Bader has already been told.`;
+    case "already-greeted": return `${f.curator ?? "The curator"} was already reminded about ${name}'s newsletter.`;
+    case "closed": return `${f.org ?? DEFAULT_ORG} is closed every workday of ${name}; there is no newsletter.`;
+    case "missed-already-said": return `${name}'s reminder was missed, and ${f.curator ?? "the curator"} has already been told.`;
   }
 }

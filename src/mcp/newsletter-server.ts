@@ -43,6 +43,7 @@ import { greetingText, missedText, nothingDueText } from "../review/reminder.js"
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
 import { isManualItem } from "../manual-events.js";
 import { PANEL_MIME, PANEL_URI, panelHtml, PREVIEW_URI } from "./panel.js";
+import { brandFor, readSettings, saveSetup, settingsStatusLine, setupPreview, validateSetup } from "../settings.js";
 
 export const SERVER_NAME = "volta-newsletter";
 
@@ -53,32 +54,35 @@ const MISSED_TASK = "claude-reminder-missed";
 const CLAIM_MS = 10 * 60 * 1000;
 
 /** Read by Claude when it connects. Rules first: they are what keeps the newsletter honest. */
-export const INSTRUCTIONS = `Volta's newsletter, reviewed by its curator (Bader) in this chat.
+export const INSTRUCTIONS = `The newsletter, reviewed by its curator in this chat. It is Volta's unless newsletter_status says otherwise.
 
 Rules you must follow:
-- Never write newsletter text yourself, and never offer to write, rewrite or "fill in" copy for an item. The newsletter is built only from the sources and from Bader's own words. Every item already has what it prints (the "prints:" lines); nothing is missing that you need to supply.
-- Lines marked "note to editor (not printed)" are advice for Bader from the source. They never appear in the newsletter. Mention them only as notes for him to consider.
-- For edit_item and add_event, pass Bader's words exactly as he gave them. If he asks you to improve or shorten wording, suggest it in chat and only save it once he says to use it, word for word.
-- When Bader wants to see the candidates, show list_candidates' result as a list: every group heading, and every item with its [x] or [ ] tick, title, date and its full text as returned. Do not shorten any item's text. You may leave out ids and links. Do not replace the list with a summary or a selection of highlights.
-- Keep "MARKED FOR REVIEW" and "On hold:" exactly as returned, so a held item is seen before it is ticked. Show a draft's notes to Bader as returned too.
-- Show a built draft's text exactly as returned, and give him the preview link. Do not summarise the draft in place of showing it.
-- Ask Bader before approve_draft and before send_campaign. Sending cannot be undone.
-- For add_source, use only what Bader gives you: an address, search words, or a Slack channel link. A source is somewhere to read from and a filter, never copy; never invent a feed and never add one he did not name.
-- When a source could not be read, tell him what it needs (a token, an invite to the channel, a sign-in) and never let its empty section pass as "nothing happened this month".
+- Never write newsletter text yourself, and never offer to write, rewrite or "fill in" copy for an item. The newsletter is built only from the sources and from the curator's own words. Every item already has what it prints (the "prints:" lines); nothing is missing that you need to supply.
+- Lines marked "note to editor (not printed)" are advice for the curator from the source. They never appear in the newsletter. Mention them only as notes for them to consider.
+- For edit_item and add_event, pass the curator's words exactly as they gave them. If they ask you to improve or shorten wording, suggest it in chat and only save it once they say to use it, word for word.
+- When the curator wants to see the candidates, show list_candidates' result as a list: every group heading, and every item with its [x] or [ ] tick, title, date and its full text as returned. Do not shorten any item's text. You may leave out ids and links. Do not replace the list with a summary or a selection of highlights.
+- Keep "MARKED FOR REVIEW" and "On hold:" exactly as returned, so a held item is seen before it is ticked. Show a draft's notes to the curator as returned too.
+- Show a built draft's text exactly as returned, and give them the preview link. Do not summarise the draft in place of showing it.
+- Ask the curator before approve_draft and before send_campaign. Sending cannot be undone.
+- For add_source, use only what the curator gives you: an address, search words, or a Slack channel link. A source is somewhere to read from and a filter, never copy; never invent a feed and never add one they did not name.
+- When a source could not be read, tell them what it needs (a token, an invite to the channel, a sign-in) and never let its empty section pass as "nothing happened this month".
+- Credentials (the Mailchimp key, the Slack token) are never asked for or typed in this chat: they are set in the host's configuration. If one is missing, say which and that it goes there.
 
-Usual order: newsletter_status, then prepare_month if the month is not prepared, then list_candidates, set_selection, edit_item / add_event as he asks, build_draft (repeat after any change), approve_draft, send_campaign.
+Setting up: if newsletter_status says the newsletter is not set up, offer once to set it up with set_up_newsletter: the organisation's name and the curator's name; the newsletter's name, the sender name and the timezone are optional. Show the tool's preview and save only when they confirm. If they decline, or keep the defaults, do not raise it again. "set up the newsletter", "change the name", "call it X", "my name is X" -> set_up_newsletter.
 
-Events he added himself: he corrects them, he does not add them again. Adding the same event twice puts it in the newsletter twice.
-- "add the link to X", "I forgot the link", "fix the link", "change the date of X", "it is at Volta" -> edit_item on that event. Never add_event again to correct one.
-- "remove that event", "delete that event", "that one was a mistake" -> remove_event, after he has said to. Only events he added; anything from a source is unticked with set_selection instead.
+Usual order: newsletter_status, then prepare_month if the month is not prepared, then list_candidates, set_selection, edit_item / add_event as they ask, build_draft (repeat after any change), approve_draft, send_campaign.
 
-Sources: Bader says these in a few words. Take them as they are, and ask only for what is missing.
+Events they added themselves: they correct them, they do not add them again. Adding the same event twice puts it in the newsletter twice.
+- "add the link to X", "I forgot the link", "fix the link", "change the date of X", "it is at our place" -> edit_item on that event. Never add_event again to correct one.
+- "remove that event", "delete that event", "that one was a mistake" -> remove_event, after they have said to. Only events they added; anything from a source is unticked with set_selection instead.
+
+Sources: the curator says these in a few words. Take them as they are, and ask only for what is missing.
 - "sources", "list sources", "what do we read?" -> list_sources.
 - "add source", "add feed", "add calendar", "add channel", or a link on its own -> add_source. Ask for the address, the search words, or the channel link, whichever the kind needs.
 - "turn off X", "pause X", "turn on X" -> set_source. "only keep X from that", "change the keywords" -> set_source with keywords.
-- "remove source", "delete source", "stop reading X" -> remove_source, after he has said to.
+- "remove source", "delete source", "stop reading X" -> remove_source, after they have said to.
 - "refresh", "refresh this month", "fetch again" -> prepare_month with force.
-A source added now is read when the period is next prepared: say so, and offer to refresh when he wants its items straight away.`;
+A source added now is read when the period is next prepared: say so, and offer to refresh when they want its items straight away.`;
 
 export interface NewsletterDeps {
   config: Config;
@@ -106,6 +110,8 @@ const text = (s: string, isError = false): ToolText => ({ content: [{ type: "tex
 export function createNewsletterServer(d: NewsletterDeps): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: "1.0.0" }, { instructions: INSTRUCTIONS });
   const tz = d.config.timezone;
+  /** "Halifax" from America/Halifax: the word the date and time boxes use. */
+  const city = (tz.split("/").pop() ?? tz).replace(/_/g, " ");
   const periodWord = cadenceOf(d.config) === "monthly" ? "month" : "week";
   let review: ReviewState | undefined;
   let previewTried = false;
@@ -114,7 +120,11 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   /** The review for the period the clock is in: the one in memory, or the saved one, or a new one. */
   async function current(): Promise<ReviewState> {
     const key = periodOf(d.clock.now(), d.config).key;
-    if (review?.week === key) return review;
+    // The names are read every call, so a set-up made a moment ago is already in force.
+    if (review?.week === key) {
+      review.brand = brandFor(d.storage);
+      return review;
+    }
     const st: ReviewState = {
       candidates: [], timeZone: tz, outDir: d.outDir, drafts: new Map(), selections: new Map(), env: d.env, campaigns: new Set(),
       now: () => d.clock.now(), layout: d.config.draft_layout, session: d.storage, edits: d.storage, storage: d.storage, week: key,
@@ -128,6 +138,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const saved = loadReview(d.storage, key);
     if (saved && "snapshot" in saved) restoreSession(st, saved.snapshot);
     if (saved && "error" in saved) d.alerter.alert("error", "session", `the saved review for ${key} could not be read: ${saved.error}`, "prepare_month with force to start it again");
+    st.brand = brandFor(d.storage);
     review = st;
     return st;
   }
@@ -209,7 +220,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       const f = facts[n.id];
       // The manual source is where Bader's own events live: "found nothing" every quiet month is noise.
       if (f?.kind === "manual" && n.status === "empty") continue;
-      const o = { periodWord, ...(f ? { name: f.name, kind: f.kind, keeps: f.keeps, keepsWords: f.keepsWords, ...(f.link ? { link: f.link } : {}) } : {}) };
+      const o = { periodWord, botName: brandFor(d.storage).newsletter, ...(f ? { name: f.name, kind: f.kind, keeps: f.keeps, keepsWords: f.keepsWords, ...(f.link ? { link: f.link } : {}) } : {}) };
       const said = (n.warnings ?? []).filter(worthSaying);
       if (n.status !== "ok") {
         lines.push(`- ${explainSourceNote(n, o)}`);
@@ -261,6 +272,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     const w = windowsFor(now, d.config);
     const draft = currentDraft(st);
     const lines = [
+      settingsStatusLine(readSettings(d.storage)),
       `Period: ${st.week} (${cadenceOf(d.config)}). First workday: ${due.firstWorkday.weekday} ${due.firstWorkday.date}${due.firstWorkday.skipped.length ? ` (skipped ${due.firstWorkday.skipped.join("; ")})` : ""}.`,
       `Due: ${due.reminder === "sent" ? "prepared" : due.reminder}.`,
       prepared(st) ? `Prepared: ${st.candidates.length} candidates, ${currentSelection(st).length} ticked.` : "Not prepared yet: call prepare_month.",
@@ -272,9 +284,32 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     return text(lines.join("\n"));
   });
 
+  server.registerTool("set_up_newsletter", {
+    title: "Set up the newsletter",
+    description: "Name the organisation the newsletter is from and the curator; optionally the newsletter's name, the sender name on the email and the timezone. Without confirm it only shows what would change; with confirm: true it saves. The names apply at once and survive updates. Never takes credentials.",
+    inputSchema: {
+      organisation: z.string().optional().describe('The organisation the newsletter is from, as the curator gave it (for example "Volta").'),
+      curator_name: z.string().optional().describe("The curator's name, for the reminder's greeting."),
+      newsletter_name: z.string().optional().describe('Optional: what the newsletter is called; "<organisation> Newsletter" when left out.'),
+      from_name: z.string().optional().describe("Optional: the sender name on the email; the organisation when left out. MAILCHIMP_FROM_NAME overrides it."),
+      timezone: z.string().optional().describe("Optional: an IANA timezone such as America/Halifax. Applies when the host next starts the server."),
+      confirm: z.boolean().optional().describe("true only once the curator has seen the preview and said to save."),
+    },
+  }, async ({ organisation, curator_name, newsletter_name, from_name, timezone, confirm }) => {
+    const current = readSettings(d.storage);
+    // A field left out keeps what was saved, so "my name is Sam" after set-up does not lose the organisation.
+    const fields = { organisation: organisation ?? current.organisation, curator_name: curator_name ?? current.curator_name, newsletter_name, from_name, timezone };
+    const errors = validateSetup(fields);
+    if (errors.length) return text(`Not saved:\n${errors.map((e) => `- ${e}`).join("\n")}`, true);
+    const preview = setupPreview(current, fields, d.config.timezone).map((l) => `- ${l}`);
+    if (!confirm) return text(["This would set:", ...preview, "", "Nothing is saved yet. Call again with confirm: true once the curator agrees."].join("\n"));
+    saveSetup(d.storage, fields, d.clock.now().toISOString());
+    return text([`Saved. It applies from now; nothing to restart.${fields.timezone ? " The timezone applies when the host next starts the server." : ""}`, ...preview].join("\n"));
+  });
+
   server.registerTool("prepare_month", {
     title: `Prepare this ${periodWord}'s newsletter`,
-    description: `Fetch every source for this ${periodWord} and list the candidates. Does nothing if already prepared, unless force is true (which fetches again; Bader's edits and added events are kept). "Refresh" or "fetch again" means force.`,
+    description: `Fetch every source for this ${periodWord} and list the candidates. Does nothing if already prepared, unless force is true (which fetches again; the curator's edits and added events are kept). "Refresh" or "fetch again" means force.`,
     inputSchema: { force: z.boolean().optional().describe("Fetch again even though this period was already prepared.") },
   }, async ({ force }) => {
     const st = await current();
@@ -285,7 +320,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     return text([
       `Prepared the ${periodWord} of ${run.period}: ${run.candidates.length} candidates (${g.upcomingEvents.length} upcoming events, ${g.pastEvents.length} past events, ${g.other.length} news and updates), ${currentSelection(st).length} ticked.`,
       ...(notes.length ? ["Sources that need attention:", ...notes] : ["Every source answered."]),
-      "Next: call list_candidates and show Bader the list, group by group, with its ticks.",
+      "Next: call list_candidates and show the curator the list, group by group, with its ticks.",
     ].join("\n"));
   });
 
@@ -294,14 +329,14 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   // greeted once per period however many times the task runs, even if two runs overlap.
   server.registerTool("monthly_reminder", {
     title: "Monthly reminder",
-    description: `For the scheduled reminder. Decides whether this ${periodWord}'s newsletter is due, prepares it if so, and returns the greeting for Bader. The first line is GREETING, MISSED or NOTHING_DUE; show what follows it exactly as returned.`,
+    description: `For the scheduled reminder. Decides whether this ${periodWord}'s newsletter is due, prepares it if so, and returns the greeting for the curator. The first line is GREETING, MISSED or NOTHING_DUE; show what follows it exactly as returned.`,
   }, async () => {
     const st = await current();
     const now = d.clock.now();
     const key = st.week!;
     const greeted = Boolean(d.storage.getMark(REMINDER_TASK, key)?.done_at);
     const decision = whatIsDue(now, d.config, { reminderSent: greeted });
-    const facts = { cadence: cadenceOf(d.config), periodKey: key, firstWorkday: decision.firstWorkday, reminderTime: d.config.reminder_time };
+    const facts = { cadence: cadenceOf(d.config), periodKey: key, firstWorkday: decision.firstWorkday, reminderTime: d.config.reminder_time, curator: st.brand?.curator, org: st.brand?.org };
     const quiet = (why: Parameters<typeof nothingDueText>[1]) => text(`NOTHING_DUE\n${nothingDueText(facts, why)}`);
     switch (decision.reminder) {
       case "not-yet": return quiet("not-yet");
@@ -311,7 +346,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         if (d.storage.getMark(MISSED_TASK, key)?.done_at) return quiet("missed-already-said");
         d.storage.claimMark(MISSED_TASK, key, now.toISOString(), CLAIM_MS);
         d.storage.completeMark(MISSED_TASK, key, now.toISOString());
-        d.alerter.alert("error", "schedule", `the reminder for ${key} was never shown`, "Bader has been told; the month can still be prepared by asking");
+        d.alerter.alert("error", "schedule", `the reminder for ${key} was never shown`, "the curator has been told; the month can still be prepared by asking");
         return text(`MISSED\n${missedText(facts)}`);
       }
       case "due":
@@ -352,7 +387,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("list_candidates", {
     title: "List the candidates",
-    description: "The candidates in groups (upcoming events, past events, news and updates), each with its id, whether it is ticked, and what Bader has edited. Use the ids with set_selection and edit_item. In apps that support it, this also opens the interactive review panel.",
+    description: "The candidates in groups (upcoming events, past events, news and updates), each with its id, whether it is ticked, and what the curator has edited. Use the ids with set_selection and edit_item. In apps that support it, this also opens the interactive review panel.",
     inputSchema: { group: z.enum(["all", "upcoming", "past", "other"]).optional().describe("Only one group. Default all.") },
     annotations: { readOnlyHint: true },
     _meta: { ui: { resourceUri: PANEL_URI }, "ui/resourceUri": PANEL_URI },
@@ -408,13 +443,13 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("add_event", {
     title: "Add an event",
-    description: "Add an event Bader knows about that no source lists. Use his words exactly. It is ticked straight away.",
+    description: "Add an event the curator knows about that no source lists. Use their words exactly. It is ticked straight away.",
     inputSchema: {
-      title: z.string().describe("Event title, as Bader gave it."),
-      date: z.string().describe("YYYY-MM-DD, in Halifax time."),
-      time: z.string().describe("HH:MM, 24-hour, in Halifax time."),
+      title: z.string().describe("Event title, as the curator gave it."),
+      date: z.string().describe(`YYYY-MM-DD, in ${city} time.`),
+      time: z.string().describe(`HH:MM, 24-hour, in ${city} time.`),
       location: z.string().optional(),
-      description: z.string().optional().describe("As Bader gave it. Leave out rather than write one."),
+      description: z.string().optional().describe("As the curator gave it. Leave out rather than write one."),
       link: z.string().optional().describe("Full https:// link, if there is one."),
       image: z.string().optional().describe("An https:// image link, or the full path of a .jpg/.png/.gif on this computer."),
     },
@@ -429,12 +464,12 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("edit_item", {
     title: "Change an item's wording",
-    description: `Change one field of a candidate to Bader's exact words, or clear his change to go back to the source. Fields: ${EDIT_FIELDS.map((f) => `${f} (${EDIT_FIELD_LABEL[f]})`).join(", ")}. title and image only on events he added. starts_at is YYYY-MM-DD HH:MM in Halifax time.`,
+    description: `Change one field of a candidate to the curator's exact words, or clear their change to go back to the source. Fields: ${EDIT_FIELDS.map((f) => `${f} (${EDIT_FIELD_LABEL[f]})`).join(", ")}. title and image only on events he added. starts_at is YYYY-MM-DD HH:MM in Halifax time.`,
     inputSchema: {
       item_id: z.string(),
       field: z.enum(EDIT_FIELDS),
-      text: z.string().optional().describe("Bader's words, exactly. Leave out when clearing."),
-      clear: z.boolean().optional().describe("Remove Bader's change and use the source's text again."),
+      text: z.string().optional().describe("The curator's words, exactly. Leave out when clearing."),
+      clear: z.boolean().optional().describe("Remove the curator's change and use the source's text again."),
     },
   }, async ({ item_id, field, text: value, clear }) => {
     const st = await current();
@@ -446,17 +481,17 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   });
 
   server.registerTool("remove_event", {
-    title: "Remove an event Bader added",
-    description: "Forget an event Bader added himself, when it was a mistake or a duplicate. Only his own events; anything from a source is unticked instead. Ask him first. He says: remove that event, delete that event.",
+    title: "Remove an event the curator added",
+    description: "Forget an event the curator added, when it was a mistake or a duplicate. Only their own events; anything from a source is unticked instead. Ask them first. He says: remove that event, delete that event.",
     inputSchema: {
       item_id: z.string().describe("The event's id, as list_candidates shows it."),
-      confirm: z.boolean().describe("true only when Bader has said to remove it."),
+      confirm: z.boolean().describe("true only when the curator has said to remove it."),
     },
     annotations: { destructiveHint: true },
   }, async ({ item_id, confirm }) => {
     const st = await current();
     if (!prepared(st)) return notPrepared();
-    if (!confirm) return text("Not removed: confirm must be true, and only once Bader has said to remove it.", true);
+    if (!confirm) return text("Not removed: confirm must be true, and only once the curator has said to remove it.", true);
     const r = removeEvent(st, item_id);
     if ("error" in r) return text(`Not removed: ${r.error}`, true);
     return text([
@@ -467,7 +502,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("build_draft", {
     title: "Build the newsletter",
-    description: "Build and verify the newsletter from what is ticked, with Bader's edits. Returns the text to show him verbatim, a preview link, and the draft key for approve_draft. Build again after any change.",
+    description: "Build and verify the newsletter from what is ticked, with the curator's edits. Returns the text to show them verbatim, a preview link, and the draft key for approve_draft. Build again after any change.",
   }, async () => {
     const st = await current();
     if (!prepared(st)) return notPrepared();
@@ -492,7 +527,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       `Draft key: ${r.key}`,
       `Subject: ${r.draft.subject}`,
       r.previewUrl ? `Preview: ${r.previewUrl}` : "Preview: not available (the preview server could not start).",
-      `Verified: every name, date and link traces to a source or to Bader.`,
+      `Verified: every name, date and link traces to a source or to the curator.`,
       ...(notes.length ? ["", ...notes] : []),
       "", "----- newsletter text (show verbatim) -----", r.draft.markdown, "----- end -----",
     ].join("\n")) };
@@ -500,7 +535,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("approve_draft", {
     title: "Approve the newsletter",
-    description: "Approve the draft with this key: saves it, and in live mode creates the email campaign (not sent). Ask Bader first.",
+    description: "Approve the draft with this key: saves it, and in live mode creates the email campaign (not sent). Ask the curator first.",
     inputSchema: { draft_key: z.string().describe("From build_draft.") },
   }, async ({ draft_key }) => {
     const st = await current();
@@ -530,8 +565,8 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
         case "already": return text(`Already approved. Campaign ${r.campaign.id} in ${r.campaign.platform}: ${r.campaign.editUrl}`);
         case "updated": return text([
           `Approved. This month's campaign ${r.campaign.id} in ${r.campaign.platform} was updated with the new version (still not sent)${r.campaign.editUrl ? `: ${r.campaign.editUrl}` : "."}`,
-          "Any changes Bader made directly in Mailchimp have been replaced by this version.",
-          `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once Bader says so.`,
+          "Any changes made directly in Mailchimp have been replaced by this version.",
+          `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once the curator says so.`,
         ].join("\n"));
         // Reached now when Mailchimp says so, not only when this side remembered it — including a
         // send made from Mailchimp's own editor, which this side had no way of knowing about.
@@ -543,7 +578,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
           `Approved. Campaign ${r.campaign.id} created in ${r.campaign.platform} (not sent): ${r.campaign.editUrl}`,
           `Audience: ${r.audience.audienceName} (${r.audience.memberCount} contacts).`,
           ...(r.held.length ? [`It includes ${r.held.length} item(s) the source put on hold: ${r.held.map((h) => h.title).join("; ")}. Check before sending.`] : []),
-          `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once Bader says so.`,
+          `To send: send_campaign with campaign_id ${r.campaign.id} and confirm: true, once the curator says so.`,
         ].join("\n"));
       }
     } catch (e) {
@@ -554,11 +589,11 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("send_campaign", {
     title: "Send the newsletter",
-    description: "Send an approved campaign to the audience. Cannot be undone. Only when Bader has said to send; confirm must be true.",
-    inputSchema: { campaign_id: z.string(), confirm: z.boolean().describe("true only when Bader has explicitly said to send.") },
+    description: "Send an approved campaign to the audience. Cannot be undone. Only when the curator has said to send; confirm must be true.",
+    inputSchema: { campaign_id: z.string(), confirm: z.boolean().describe("true only when the curator has explicitly said to send.") },
     annotations: { destructiveHint: true },
   }, async ({ campaign_id, confirm }) => {
-    if (!confirm) return text("Not sent: confirm must be true, and only once Bader has said to send.", true);
+    if (!confirm) return text("Not sent: confirm must be true, and only once the curator has said to send.", true);
     const st = await current();
     try {
       const r = await send(st, campaign_id);
@@ -580,7 +615,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   async function checkSource(source: SourceConfig, about: { name: string; kind: string; keeps: string; keepsWords: string; link?: string }): Promise<{ ok: boolean; text: string; allDropped?: boolean }> {
     const fetcher = fetcherFor(source.kind);
     if (!fetcher) return { ok: false, text: `There is no reader for ${source.kind} yet, so it cannot be checked.` };
-    const say = (note: SourceNote) => explainSourceNote(note, { ...about, periodWord });
+    const say = (note: SourceNote) => explainSourceNote(note, { ...about, periodWord, botName: brandFor(d.storage).newsletter });
     try {
       const r = await fetcher.fetch(source, {
         config: d.config, clock: d.clock, storage: d.storage, windows: windowsFor(d.clock.now(), d.config), env: d.env,
@@ -637,16 +672,16 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("add_source", {
     title: "Add a source",
-    description: "Add somewhere the newsletter reads items from. Use only what Bader gives you: an address, search words, or a Slack channel link. Never invent a source, and never add one he did not name.",
+    description: "Add somewhere the newsletter reads items from. Use only what the curator gives you: an address, search words, or a Slack channel link. Never invent a source, and never add one he did not name.",
     inputSchema: {
-      kind: z.enum(ADDABLE_KINDS).describe("What he is adding: rss for a feed, google_news for a news search, ics for a calendar, linkedin_company for a company page, slack_channel for a Slack channel."),
+      kind: z.enum(ADDABLE_KINDS).describe("What they are adding: rss for a feed, google_news for a news search, ics for a calendar, linkedin_company for a company page, slack_channel for a Slack channel."),
       url: z.string().optional().describe("The full https:// address of the feed, calendar or page. Leave it out for a news search."),
-      terms: z.array(z.string()).optional().describe("For a news search only: the words to search for, in Bader's own words, such as Volta Halifax."),
+      terms: z.array(z.string()).optional().describe("For a news search only: the words to search for, in the curator's own words, such as the organisation's name and its city."),
       channel_id: z.string().optional().describe("For a Slack channel: the link from Copy link, or the id such as C0123ABCD from the channel's About tab."),
       keywords: z.array(z.string()).optional().describe("Keep only items from this source mentioning one of these words. Leave it out to use the newsletter's watchlist, or give an empty list to keep everything it publishes."),
-      name: z.string().optional().describe("A short name for the source list, in Bader's words. It is never printed in the newsletter."),
+      name: z.string().optional().describe("A short name for the source list, in the curator's words. It is never printed in the newsletter."),
       content: z.enum(["news", "events"]).optional().describe("Whether a feed lists news or events. A calendar is events already."),
-      check: z.boolean().optional().describe("Read the source once now to see whether it answers. True unless Bader says not to."),
+      check: z.boolean().optional().describe("Read the source once now to see whether it answers. True unless the curator says not to."),
       refresh: z.boolean().optional().describe("Fetch every source again straight away, so this one's items appear in the list now."),
     },
   }, async (f) => {
@@ -664,7 +699,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     // A Slack channel with no token is kept but left off, so it can never look as if it were working.
     const blocked = made.row.kind === "slack_channel" && !d.env.SLACK_BOT_TOKEN;
     const row = d.storage.addCuratorSource({ ...made.row, enabled: !blocked, added_at: d.clock.now().toISOString() });
-    const note = credentialNote(row.kind, d.env);
+    const note = credentialNote(row.kind, d.env, brandFor(d.storage).newsletter);
 
     const keeps = filterWords(row, d.config, row.kind);
     const lines = [`Added ${KIND_LABEL[f.kind]}: ${row.label || row.id} reads ${readsWhat(row)}, and keeps ${keeps}.`];
@@ -700,7 +735,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("set_source", {
     title: "Turn a source on or off, or change its keywords",
-    description: "Stop or start reading one of Bader's own sources, or replace the words it keeps items by. The maintainer's sources cannot be changed here.",
+    description: "Stop or start reading one of the curator's own sources, or replace the words it keeps items by. The maintainer's sources cannot be changed here.",
     inputSchema: {
       source_id: z.string().describe("The source's id, as list_sources shows it."),
       enabled: z.boolean().optional().describe("False stops reading it without losing it; true starts again."),
@@ -718,7 +753,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       d.storage.setCuratorSourceEnabled(mine.id, enabled, d.clock.now().toISOString());
     }
     const now = d.storage.listCuratorSources().find((r) => r.id === source_id)!;
-    const note = now.enabled ? credentialNote(now.kind, d.env) : undefined;
+    const note = now.enabled ? credentialNote(now.kind, d.env, brandFor(d.storage).newsletter) : undefined;
     return text([
       `${now.label || now.id} is now ${now.enabled ? "on" : "off"}, and keeps ${filterWords(now, d.config, now.kind)}.`,
       ...(note ? [note] : []),
@@ -728,14 +763,14 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
 
   server.registerTool("remove_source", {
     title: "Remove a source",
-    description: "Forget one of Bader's own sources. Items already fetched from it stay in this period's list, and anything already sent is untouched. Ask him first.",
+    description: "Forget one of the curator's own sources. Items already fetched from it stay in this period's list, and anything already sent is untouched. Ask them first.",
     inputSchema: {
       source_id: z.string().describe("The source's id, as list_sources shows it."),
-      confirm: z.boolean().describe("true only when Bader has said to remove it."),
+      confirm: z.boolean().describe("true only when the curator has said to remove it."),
     },
     annotations: { destructiveHint: true },
   }, async ({ source_id, confirm }) => {
-    if (!confirm) return text("Not removed: confirm must be true, and only once Bader has said to remove it.", true);
+    if (!confirm) return text("Not removed: confirm must be true, and only once the curator has said to remove it.", true);
     const mine = d.storage.listCuratorSources().find((r) => r.id === source_id);
     if (!mine) return text(notHis(source_id, "remove"), true);
     d.storage.removeCuratorSource(source_id);
@@ -765,7 +800,7 @@ export function describeItem(it: Item, ticked: boolean, timeZone: string, now?: 
     `${ticked ? "[x]" : "[ ]"} ${it.requires_review ? `${REVIEW_LABEL} · ` : ""}${it.title}`,
     it.type === "event" ? `${isPastEvent(it, now) ? "held" : "on"} ${date} ${time}${it.location ? ` at ${it.location}` : ""}` : `${it.type} from ${it.source}, ${date}`,
   ];
-  if (it.edited_fields?.length) bits.push(`edited by Bader: ${it.edited_fields.map((f) => EDIT_FIELD_LABEL[f as EditField] ?? f).join(", ")}`);
+  if (it.edited_fields?.length) bits.push(`edited by you: ${it.edited_fields.map((f) => EDIT_FIELD_LABEL[f as EditField] ?? f).join(", ")}`);
   if (it.image) bits.push("has an image");
   const lines = [`- ${bits.join(" | ")}`, `  id: ${it.id}`];
   // What the newsletter would print for this item, in full. A founder update prints its points,

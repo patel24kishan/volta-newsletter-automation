@@ -41,13 +41,14 @@ function now(st: ReviewState): Date {
  * does. Both builds here go through this, or the email rebuilt at Approve could disagree with the
  * one that was previewed.
  */
-function draftOptions(st: ReviewState): Pick<DraftOptions, "timeZone" | "cadence" | "period" | "now" | "offered"> {
+function draftOptions(st: ReviewState): Pick<DraftOptions, "timeZone" | "cadence" | "period" | "now" | "offered" | "brand"> {
   return {
     timeZone: st.timeZone,
     now: now(st),
+    ...(st.brand ? { brand: st.brand } : {}),
     // Everything this period had, not just what he ticked, so an empty section can tell "there was
     // nothing" from "he used none of it".
-    offered: offeredSections(withEdits(st, st.candidates.map((c) => c.item)), now(st)),
+    offered: offeredSections(withEdits(st, st.candidates.map((c) => c.item)), now(st), st.brand),
     ...(st.cadence ? { cadence: st.cadence } : {}),
     ...(st.week ? { period: st.week } : {}),
   };

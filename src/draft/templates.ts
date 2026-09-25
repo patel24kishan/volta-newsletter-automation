@@ -22,6 +22,8 @@ export interface Draft {
   verification: VerifyResult;
 }
 
+import { DEFAULT_BRAND, type Brand } from "../brand.js";
+
 export interface DraftOptions {
   timeZone: string;
   /** Optional closing line, e.g. an AI-assisted disclosure decided by Volta. */
@@ -51,14 +53,16 @@ export interface DraftOptions {
    * image out. By default only https images are shown.
    */
   imageSrc?: (ref: string) => string | undefined;
+  /** The names printed: organisation, newsletter, sender. Volta when absent (src/brand.ts). */
+  brand?: Brand;
 }
+
+const brandIn = (o: Pick<DraftOptions, "brand">): Brand => o.brand ?? DEFAULT_BRAND;
 
 const T = {
   events: "Upcoming events",
-  pastEvents: "Last month at Volta",
   held: "Held",
   news: "In the news",
-  linkedin: "From Volta on LinkedIn",
   insights: "Key insights",
   withPerson: "With",
   ceo: "From the CEO",
@@ -68,11 +72,25 @@ const T = {
   alsoOn: "Also covered",
   when: "When",
   where: "Where",
-  intro: "Here is what is happening at Volta and around our community.",
   brief: "Brief",
   standard: "Standard",
   eventsFirst: "Events first",
 };
+
+/** The phrases that name the organisation. Everything else in T is the same whoever sends it. */
+function B(brand: Brand) {
+  const org = brand.org;
+  return {
+    pastEvents: `Last month at ${org}`,
+    linkedin: `From ${org} on LinkedIn`,
+    emptyLinkedin: `Nothing from ${org} on LinkedIn`,
+    intro: `Here is what is happening at ${org} and around our community.`,
+    title: (c: Cadence) => `This ${PERIOD_WORD[c]} at ${org}`,
+    subjectPrefix: (c: Cadence) => `${org} this ${PERIOD_WORD[c]}`,
+    masthead: org,
+    footer: `You're getting this because you signed up at ${org}.`,
+  };
+}
 
 /** The phrases that name the period, so a monthly newsletter never says "this week". */
 const PERIOD_WORD: Record<Cadence, string> = { weekly: "week", monthly: "month" };
@@ -81,37 +99,40 @@ const PERIOD_WORD: Record<Cadence, string> = { weekly: "week", monthly: "month" 
  * out: an earlier version lowercased the heading and spliced it into "No ... items", which sent
  * subscribers "No in the news items this month." A heading added without a line here gets the fallback.
  */
-const EMPTY: Record<string, string> = {
+const EMPTY = (b: Brand): Record<string, string> => ({
   [T.events]: "No upcoming events",
-  [T.pastEvents]: "No events to look back on",
+  [B(b).pastEvents]: "No events to look back on",
   [T.news]: "No news to report",
-  [T.linkedin]: "Nothing from Volta on LinkedIn",
+  [B(b).linkedin]: B(b).emptyLinkedin,
   [T.insights]: "No member updates",
   [T.ceo]: "No update from the CEO",
-};
+});
 const EMPTY_FALLBACK = "Nothing to report";
 const emptyLine = (stem: string, c: Cadence) => `${stem} this ${PERIOD_WORD[c]}.`;
 const P = {
-  title: (c: Cadence) => `This ${PERIOD_WORD[c]} at Volta`,
-  subjectPrefix: (c: Cadence) => `Volta this ${PERIOD_WORD[c]}`,
-  none: (section: string, c: Cadence) => emptyLine(EMPTY[section] ?? EMPTY_FALLBACK, c),
+  none: (section: string, c: Cadence, b: Brand) => emptyLine(EMPTY(b)[section] ?? EMPTY_FALLBACK, c),
   /** The related links beyond the few a story shows: "and 35 more". */
   more: (n: number) => `and ${n} more`,
 };
 const CADENCES: Cadence[] = ["weekly", "monthly"];
 const cadence = (o: Pick<DraftOptions, "cadence">): Cadence => o.cadence ?? "weekly";
 
-/** Every fixed phrase the templates can emit, for the verifier allowlist. */
-export const TEMPLATE_PHRASES: string[] = [
-  ...CADENCES.map(P.title), T.events, T.pastEvents, T.held, T.news, T.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, T.intro,
-  T.brief, T.standard, T.eventsFirst, ...CADENCES.map(P.subjectPrefix), "Volta", "LinkedIn", "Halifax",
-  ...CADENCES.flatMap((c) => [...Object.values(EMPTY), EMPTY_FALLBACK].map((s) => emptyLine(s, c))),
+/** Every fixed phrase the templates can emit for this brand, for the verifier allowlist. */
+export function templatePhrases(brand: Brand = DEFAULT_BRAND): string[] {
+  const b = B(brand);
+  return [
+  ...CADENCES.map(b.title), T.events, b.pastEvents, T.held, T.news, b.linkedin, T.insights, T.withPerson, T.ceo, T.eventPage, T.readMore, T.viewPost, T.alsoOn, T.when, T.where, b.intro,
+  T.brief, T.standard, T.eventsFirst, ...CADENCES.map(b.subjectPrefix), brand.org, "LinkedIn", "Halifax",
+  ...CADENCES.flatMap((c) => [...Object.values(EMPTY(brand)), EMPTY_FALLBACK].map((s) => emptyLine(s, c))),
   // The count in "and 35 more" cannot be enumerated. The verifier checks names, links, dates and
   // times, never a bare number, so one instance stands for every count.
   P.more(1),
   // Deliberately absent: "MARKED FOR REVIEW". It is the curator's label and lives only in Slack,
   // so if it ever reached a draft the verifier would reject it rather than wave it through.
-];
+  ];
+}
+/** The default brand's phrases, for callers that verify a Volta draft. */
+export const TEMPLATE_PHRASES: string[] = templatePhrases();
 
 /** One entry in an item's link line. Without an href it is plain text among the links ("and 35 more"). */
 type Link = { label: string; href?: string };
@@ -140,6 +161,7 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
     { id: "events-first", name: T.eventsFirst, blocks: eventsFirstBlocks(groups, opts) },
   ];
   const layouts = wanted ? all.filter((l) => wanted.includes(l.id)) : all;
+  const brand = brandIn(opts);
   const subject = subjectLine(items, opts);
   const label = periodLabel(opts);
   return layouts.map(({ id, name, blocks }) => {
@@ -148,9 +170,9 @@ export function buildDrafts(items: Item[], opts: DraftOptions): Draft[] {
     const markdown = renderMarkdown(all);
     // The period's name is the template's own word, not something a source said, so it is allowed
     // here for the same reason the headings are.
-    const allow = [...TEMPLATE_PHRASES, ...(label ? [label] : []), ...(opts.footer ? [opts.footer] : [])];
+    const allow = [...templatePhrases(brand), ...(label ? [label] : []), ...(opts.footer ? [opts.footer] : [])];
     const verification = verifyDraft(markdown, items, { timeZone: opts.timeZone, allow });
-    return { id, name, subject, markdown, html: renderHtml(all, subject), item_ids: items.map((i) => i.id), verification };
+    return { id, name, subject, markdown, html: renderHtml(all, subject, brand), item_ids: items.map((i) => i.id), verification };
   });
 }
 
@@ -186,7 +208,7 @@ function groupItems(items: Item[], now?: Date): Groups {
  * always has. The same fallback covers a monthly caller that has no period to give.
  */
 function subjectLine(items: Item[], o: DraftOptions): string {
-  const prefix = P.subjectPrefix(cadence(o));
+  const prefix = B(brandIn(o)).subjectPrefix(cadence(o));
   const name = periodLabel(o) ?? items[0]?.title;
   return name ? `${prefix}: ${name}` : prefix;
 }
@@ -208,7 +230,7 @@ function section(title: string, list: Item[], render: (it: Item) => Block, o: Dr
   // nothing; a heading kept says something, and it has to be true.
   if (list.length === 0 && o.offered?.includes(title)) return [];
   const blocks: Block[] = [{ kind: "h2", text: title }];
-  if (list.length === 0) blocks.push({ kind: "p", text: P.none(title, cadence(o)) });
+  if (list.length === 0) blocks.push({ kind: "p", text: P.none(title, cadence(o), brandIn(o)) });
   else for (const it of list) blocks.push(render(it));
   return blocks;
 }
@@ -218,13 +240,14 @@ function section(title: string, list: Item[], render: (it: Item) => Block, o: Dr
  * expects. It groups the candidates with the very function that groups the newsletter, so the two
  * cannot drift into disagreeing about which heading an item belongs under.
  */
-export function offeredSections(candidates: Item[], now?: Date): string[] {
+export function offeredSections(candidates: Item[], now?: Date, brand: Brand = DEFAULT_BRAND): string[] {
   const g = groupItems(candidates, now);
+  const b = B(brand);
   return [
     ...(g.events.length ? [T.events] : []),
-    ...(g.pastEvents.length ? [T.pastEvents] : []),
+    ...(g.pastEvents.length ? [b.pastEvents] : []),
     ...(g.news.length ? [T.news] : []),
-    ...(g.linkedin.length ? [T.linkedin] : []),
+    ...(g.linkedin.length ? [b.linkedin] : []),
     ...(g.members.length ? [T.insights] : []),
     ...(g.ceo.length ? [T.ceo] : []),
   ];
@@ -235,7 +258,7 @@ export function offeredSections(candidates: Item[], now?: Date): string[] {
  * one, and a month with none to recall is better without an empty heading.
  */
 function pastSection(g: Groups, render: (it: Item) => Block, o: DraftOptions): Block[] {
-  return g.pastEvents.length ? section(T.pastEvents, g.pastEvents, render, o) : [];
+  return g.pastEvents.length ? section(B(brandIn(o)).pastEvents, g.pastEvents, render, o) : [];
 }
 
 /** Key insights appears only when a member update was selected; the other sections always show. */
@@ -249,18 +272,18 @@ function briefBlocks(g: Groups, o: DraftOptions): Block[] {
     if (it.insights?.length) block.bullets = it.insights.slice(0, 1); // brief: the lead point only
     return withImage(block, it, o);
   };
-  return [...section(T.events, g.events, line, o), ...pastSection(g, line, o), ...insightsSection(g, line, o), ...section(T.news, g.news, line, o), ...section(T.linkedin, g.linkedin, line, o), ...(g.ceo.length ? section(T.ceo, g.ceo, line, o) : [])];
+  return [...section(T.events, g.events, line, o), ...pastSection(g, line, o), ...insightsSection(g, line, o), ...section(T.news, g.news, line, o), ...section(B(brandIn(o)).linkedin, g.linkedin, line, o), ...(g.ceo.length ? section(T.ceo, g.ceo, line, o) : [])];
 }
 
 /** Standard leads with the stories: Key insights first, then events, news and LinkedIn. */
 function standardBlocks(g: Groups, o: DraftOptions): Block[] {
   return [
-    { kind: "p", text: T.intro },
+    { kind: "p", text: B(brandIn(o)).intro },
     ...insightsSection(g, (it) => fullItem(it, o), o),
     ...section(T.events, g.events, (it) => fullItem(it, o), o),
     ...pastSection(g, (it) => fullItem(it, o), o),
     ...section(T.news, g.news, (it) => fullItem(it, o), o),
-    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o), o),
+    ...section(B(brandIn(o)).linkedin, g.linkedin, (it) => fullItem(it, o), o),
     ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o), o) : []),
   ];
 }
@@ -275,7 +298,7 @@ function eventsFirstBlocks(g: Groups, o: DraftOptions): Block[] {
     ...pastSection(g, (it) => fullItem(it, o), o),
     ...insightsSection(g, (it) => fullItem(it, o), o),
     ...section(T.news, g.news, (it) => fullItem(it, o), o),
-    ...section(T.linkedin, g.linkedin, (it) => fullItem(it, o), o),
+    ...section(B(brandIn(o)).linkedin, g.linkedin, (it) => fullItem(it, o), o),
     ...(g.ceo.length ? section(T.ceo, g.ceo, (it) => fullItem(it, o), o) : []),
   ];
 }
@@ -369,14 +392,12 @@ export const MERGE_TAGS = {
  * fixed text, so they cannot carry an invented fact; the test suite checks that the HTML says
  * nothing else beyond the blocks themselves.
  */
-export const HTML_CHROME: string[] = [
-  T.intro,
-  "Volta",
-  "You're getting this because you signed up at Volta.",
-  "Unsubscribe",
-  "Update your preferences",
-  "View in browser",
-];
+export function htmlChrome(brand: Brand = DEFAULT_BRAND): string[] {
+  const b = B(brand);
+  return [b.intro, b.masthead, b.footer, "Unsubscribe", "Update your preferences", "View in browser"];
+}
+/** The default brand's chrome. */
+export const HTML_CHROME: string[] = htmlChrome();
 
 const C = { ink: "#111820", body: "#3F4956", muted: "#5A6472", rule: "#E2E6EA", accent: "#1B3FE0", page: "#EDEFF2" };
 const SANS = "Helvetica,Arial,sans-serif";
@@ -392,9 +413,10 @@ const HEAD_CSS =
  * (MSO) block, a hidden preheader, and the unsubscribe/address footer Mailchimp requires. It renders
  * the same blocks as the Markdown, so it adds no words beyond HTML_CHROME.
  */
-export function renderHtml(blocks: Block[], title: string): string {
+export function renderHtml(blocks: Block[], title: string, brand: Brand = DEFAULT_BRAND): string {
+  const b = B(brand);
   const rows = blocks.map(htmlRow).join("\n");
-  const preheader = `${esc(T.intro)}${"&#847;&zwnj;&nbsp;".repeat(9)}`;
+  const preheader = `${esc(b.intro)}${"&#847;&zwnj;&nbsp;".repeat(9)}`;
   return [
     `<!DOCTYPE html>`,
     `<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">`,
@@ -412,9 +434,9 @@ export function renderHtml(blocks: Block[], title: string): string {
     `<div style="display:none;font-size:1px;color:${C.page};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${preheader}</div>`,
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${C.page};"><tr><td align="center" style="padding:24px 12px;">`,
     `<table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background-color:#FFFFFF;">`,
-    `<tr><td class="pad" style="padding:28px 40px 20px 40px;border-bottom:1px solid ${C.rule};font-family:${SERIF};font-size:22px;font-weight:bold;color:${C.ink};">Volta</td></tr>`,
+    `<tr><td class="pad" style="padding:28px 40px 20px 40px;border-bottom:1px solid ${C.rule};font-family:${SERIF};font-size:22px;font-weight:bold;color:${C.ink};">${esc(b.masthead)}</td></tr>`,
     rows,
-    htmlFooter(),
+    htmlFooter(b.footer),
     `</table>`,
     `</td></tr></table>`,
     `</body>`,
@@ -454,10 +476,10 @@ function htmlTextRow(kind: "h1" | "h2" | "p", text: string): string {
   return `<tr><td class="pad" style="padding:12px 40px 4px 40px;font-family:${SANS};font-size:16px;line-height:24px;color:${C.body};">${esc(text)}</td></tr>`;
 }
 
-function htmlFooter(): string {
+function htmlFooter(signedUp: string): string {
   const link = (tag: string, label: string) => `<a href="${tag}" style="color:#7C8798;text-decoration:underline;">${label}</a>`;
   return `<tr><td class="pad" style="padding:32px 40px;background-color:${C.ink};font-family:${SANS};font-size:12px;line-height:20px;color:#C6CEDA;">` +
-    `You're getting this because you signed up at Volta.<br>${MERGE_TAGS.address}<br>` +
+    `${esc(signedUp)}<br>${MERGE_TAGS.address}<br>` +
     `${link(MERGE_TAGS.unsub, "Unsubscribe")} &nbsp;|&nbsp; ${link(MERGE_TAGS.profile, "Update your preferences")} &nbsp;|&nbsp; ${link(MERGE_TAGS.archive, "View in browser")}` +
     `</td></tr>`;
 }

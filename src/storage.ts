@@ -45,6 +45,10 @@ export interface Storage {
   getMark(task: string, period: string): ScheduleMark | undefined;
   /** Keep work for `task` so a retry, even after a restart, need not repeat it. */
   setMarkPayload(task: string, period: string, payload: string): void;
+  /** The curator's saved settings (src/settings.ts): the names the newsletter uses. `null` removes one. */
+  getSetting(key: string): string | undefined;
+  setSetting(key: string, value: string | null, nowIso: string): void;
+  listSettings(): SettingRow[];
   /**
    * The curator's own wording for one field of one item, for a period. Kept apart from the items,
    * which are never overwritten, so a re-fetch cannot lose it. `null` removes it.
@@ -100,6 +104,8 @@ export interface CuratorEdit {
   value: string;
   edited_at: string;
 }
+
+export interface SettingRow { key: string; value: string; updated_at: string }
 
 export interface ScheduleMark {
   task: string;
@@ -204,6 +210,11 @@ export class SqliteStorage implements Storage {
         last_note TEXT NOT NULL DEFAULT '',
         enabled INTEGER NOT NULL,
         added_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
     `);
     this.migrate();
@@ -444,6 +455,24 @@ export class SqliteStorage implements Storage {
     this.db
       .prepare("INSERT INTO schedule_marks (task, period, payload) VALUES (?, ?, ?) ON CONFLICT(task, period) DO UPDATE SET payload = excluded.payload")
       .run(task, period, payload);
+  }
+
+  getSetting(key: string): string | undefined {
+    return (this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined)?.value;
+  }
+
+  setSetting(key: string, value: string | null, nowIso: string): void {
+    if (value === null || value === "") {
+      this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+      return;
+    }
+    this.db
+      .prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+      .run(key, value, nowIso);
+  }
+
+  listSettings(): SettingRow[] {
+    return this.db.prepare("SELECT key, value, updated_at FROM settings ORDER BY key").all() as unknown as SettingRow[];
   }
 
   close(): void {

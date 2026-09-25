@@ -42,7 +42,8 @@ class MovableClock implements Clock {
 
 let dir: string;
 let storage: SqliteStorage;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "volta-reminder-")); storage = new SqliteStorage(join(dir, "db.sqlite")); });
+// The curator has been through set-up, so the greeting is to Bader by name: the setting, not a constant.
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "volta-reminder-")); storage = new SqliteStorage(join(dir, "db.sqlite")); storage.setSetting("curator_name", "Bader", "2026-09-01T00:00:00Z"); });
 afterEach(() => { storage.close(); rmSync(dir, { recursive: true, force: true }); });
 
 /** One copy of the server, as the Claude app starts it; `runs` counts real fetches. */

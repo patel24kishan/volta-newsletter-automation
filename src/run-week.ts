@@ -11,6 +11,7 @@ import type { Alerter } from "./alerts.js";
 import { localDateString, type Clock } from "./clock.js";
 import { cadenceOf, type Cadence, type Config } from "./config.js";
 import { buildDrafts, offeredSections, type Draft } from "./draft/templates.js";
+import { brandFor } from "./settings.js";
 import { fetcherFor } from "./fetchers/index.js";
 import { effectiveSources } from "./sources/curator-sources.js";
 import { keepRelevant } from "./sources/relevance.js";
@@ -136,12 +137,13 @@ export async function runWeek(o: RunOptions): Promise<RunSummary> {
   // By the clock, the same way the draft below and the candidate list decide it: otherwise an event
   // that has just started could be pre-ticked here and printed as already held in the newsletter.
   const preselected = candidates.filter((c) => !c.item.requires_review && !isPastEvent(c.item, now)).slice(0, n).map((c) => c.item);
+  const brand = brandFor(storage);
   const drafts = buildDrafts(preselected, {
-    timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config),
+    timeZone: config.timezone, layouts: [config.draft_layout], cadence: cadenceOf(config), brand,
     period: periodOf(now, config).key, now,
     // Everything the month had, not just the pre-ticked few: an empty section then says "nothing
     // this month" only when that is true.
-    offered: offeredSections(candidates.map((c) => c.item), now),
+    offered: offeredSections(candidates.map((c) => c.item), now, brand),
   });
   const draftRows: RunSummary["drafts"] = [];
   for (const d of drafts) {

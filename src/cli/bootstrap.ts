@@ -13,6 +13,7 @@ import type { NewsletterDeps } from "../mcp/newsletter-server.js";
 import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
 import { liveClockProblem } from "../runtime.js";
+import { brandFor, readSettings } from "../settings.js";
 import { SqliteStorage } from "../storage.js";
 import { startPreviewServer } from "../surface/preview-server.js";
 import { loadDotEnv } from "./env.js";
@@ -51,11 +52,14 @@ export async function createDeps(o: { env: NodeJS.ProcessEnv; argv?: string[]; p
   const clockProblem = liveClockProblem(env, clock);
   if (clockProblem) throw new StartupProblem(clockProblem);
 
-  const config = await loadConfig(paths.configPath);
+  const loaded = await loadConfig(paths.configPath);
   const storage = new SqliteStorage(paths.databasePath);
+  // A timezone the curator saved wins over the packaged config's; it is read once, at start.
+  const savedTz = readSettings(storage).timezone;
+  const config = savedTz ? { ...loaded, timezone: savedTz } : loaded;
   const alerter = new ConsoleFileAlerter(paths.alertsLog, () => clock.now());
 
-  const mail = mailchimpFromEnv(env);
+  const mail = mailchimpFromEnv(env, () => brandFor(storage).fromName);
   if (mail.problem) alerter.alert("error", "email", `the email platform is not configured: ${mail.problem}`, "approve will save the file only until it is; newsletter_status names the missing value");
   let audience: { audienceName: string; memberCount: number } | undefined;
   if (mail.publisher) {

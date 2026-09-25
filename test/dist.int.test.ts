@@ -15,7 +15,7 @@ import { build } from "../scripts/build.mjs";
 
 const repo = resolve(import.meta.dirname, "..");
 const main = join(repo, "dist", "cli", "main.js");
-const TOOLS = ["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_event", "remove_source", "send_campaign", "set_selection", "set_source"];
+const TOOLS = ["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_event", "remove_source", "send_campaign", "set_selection", "set_source", "set_up_newsletter"];
 
 let dir: string;
 beforeAll(() => {
@@ -49,7 +49,7 @@ describe("the compiled package", { timeout: 60_000 }, () => {
     expect(failure?.stderr).toContain('unknown command "frobnicate"');
   });
 
-  it("serves the fifteen tools and renders the review panel from dist", async () => {
+  it("serves the sixteen tools and renders the review panel from dist", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath, args: [main, "serve"], cwd: join(dir, "elsewhere"),
       env: { ...baseEnv(), VOLTA_NEWSLETTER_HOME: join(dir, "data"), DEMO_NOW: "2026-10-01T11:30:00Z", ALLOW_LIVE: "0" },
@@ -66,7 +66,7 @@ describe("the compiled package", { timeout: 60_000 }, () => {
       const page = panel.contents[0] as { mimeType?: string; text?: string };
       expect(page.mimeType).toBe("text/html;profile=mcp-app");
       expect(page.text).toContain('<main id="root">');
-      expect(page.text).toContain("Volta newsletter review"); // from the copied panel-client.js
+      expect(page.text).toContain('new App({ name: "Newsletter review"'); // from the copied panel-client.js
       expect(existsSync(join(dir, "data", "newsletter.sqlite"))).toBe(true);
     } finally {
       await client.close();

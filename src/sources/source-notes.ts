@@ -53,8 +53,11 @@ export function sourceLink(source: Pick<SourceConfig, "kind" | "url" | "channel_
   return source.url || source.fallback_link;
 }
 
-/** What to do about a failure, in Bader's words. Undefined when there is nothing he can do. */
-export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; keeps?: string; keepsWords?: string; env?: NodeJS.ProcessEnv; periodWord?: string } = {}): string | undefined {
+/** The Slack app's name as installed in Volta's workspace; the saved brand's newsletter name elsewhere. */
+export const DEFAULT_BOT = "Volta Newsletter";
+
+/** What to do about a failure, in the curator's words. Undefined when there is nothing they can do. */
+export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; keeps?: string; keepsWords?: string; env?: NodeJS.ProcessEnv; periodWord?: string; botName?: string } = {}): string | undefined {
   const err = note.error ?? "";
   const say = `then say: refresh${o.periodWord ? ` this ${o.periodWord}` : ""}.`;
 
@@ -62,7 +65,7 @@ export function remedyFor(note: SourceNote, o: { kind?: string; name?: string; k
     return `The maintainer has to set SLACK_BOT_TOKEN on this computer. Once they have, ${say}`;
   }
   if (/not_in_channel/.test(err)) {
-    return `The bot is not in that channel. Open it, type /invite @Volta Newsletter, ${say}`;
+    return `The bot is not in that channel. Open it, type /invite @${o.botName ?? DEFAULT_BOT}, ${say}`;
   }
   if (/missing_scope/.test(err)) {
     return "The maintainer has to give the bot permission to read channels (channels:history, channels:read and users:read) and reinstall it.";
@@ -148,7 +151,7 @@ export function droppedCount(warnings: string[]): number {
 /** A source's fate as one or two sentences for Bader, with where to go and what to do. */
 export function explainSourceNote(
   note: SourceNote,
-  o: { name?: string; kind?: string; keeps?: string; keepsWords?: string; link?: string; env?: NodeJS.ProcessEnv; periodWord?: string } = {},
+  o: { name?: string; kind?: string; keeps?: string; keepsWords?: string; link?: string; env?: NodeJS.ProcessEnv; periodWord?: string; botName?: string } = {},
 ): string {
   const name = o.name || note.id;
   const remedy = remedyFor(note, o);

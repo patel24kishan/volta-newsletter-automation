@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDrafts, HTML_CHROME, MERGE_TAGS, offeredSections, whenLine } from "../src/draft/templates.js";
+import { buildDrafts, HTML_CHROME, MERGE_TAGS, offeredSections, templatePhrases, whenLine } from "../src/draft/templates.js";
 import { itemFromManualEvent } from "../src/manual-events.js";
 import { sampleItem } from "./helpers.js";
 
@@ -197,6 +197,26 @@ describe("the subject line", () => {
 
   it("still names the month when nothing is ticked at all", () => {
     expect(buildDrafts([], { ...monthly, layouts: ["standard"] })[0]!.subject).toBe("Volta this month: September 2026");
+  });
+
+  it("names another organisation everywhere Volta was, and the verifier accepts it", () => {
+    const brand = { org: "Acme", newsletter: "Acme Newsletter", fromName: "Acme" };
+    for (const d of buildDrafts([mixer, yoga, post, news], { ...monthly, brand })) {
+      expect(d.subject, d.id).toBe("Acme this month: September 2026");
+      expect(d.verification.violations, d.id).toEqual([]);
+      // Item text keeps its own words ("Where: Volta, Halifax"); only the template's phrases change.
+      expect(d.markdown, d.id).not.toMatch(/Volta this|From Volta|Last month at Volta/);
+      expect(d.html, d.id).toContain("You're getting this because you signed up at Acme.");
+      expect(d.html, d.id).not.toContain("signed up at Volta");
+    }
+    const std = buildDrafts([post], { ...monthly, brand, layouts: ["standard"] })[0]!;
+    expect(std.markdown).toContain("## From Acme on LinkedIn");
+    expect(std.markdown).toContain("Here is what is happening at Acme and around our community.");
+    expect(buildDrafts([], { ...monthly, brand, layouts: ["standard"] })[0]!.markdown).toContain("Nothing from Acme on LinkedIn this month.");
+    expect(offeredSections([post], undefined, brand)).toEqual(["From Acme on LinkedIn"]);
+    // Volta's own phrases are not quietly allowlisted for someone else's newsletter.
+    expect(templatePhrases(brand)).not.toContain("Volta");
+    expect(templatePhrases(brand)).toContain("Acme");
   });
 
   it("names the top item when there is no month to name, as a weekly newsletter always has", () => {

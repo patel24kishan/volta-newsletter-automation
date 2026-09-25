@@ -104,6 +104,28 @@ describe("SqliteStorage", () => {
   });
 });
 
+describe("settings", () => {
+  let s: SqliteStorage;
+  beforeEach(() => { s = new SqliteStorage(":memory:"); });
+  afterEach(() => s.close());
+
+  it("round-trips a value, replaces it, and removes it on null or empty", () => {
+    expect(s.getSetting("organisation")).toBeUndefined();
+    expect(s.listSettings()).toEqual([]);
+    s.setSetting("organisation", "Acme", "2026-10-01T00:00:00Z");
+    s.setSetting("curator_name", "Sam", "2026-10-01T00:00:00Z");
+    expect(s.getSetting("organisation")).toBe("Acme");
+    s.setSetting("organisation", "Acme Labs", "2026-10-02T00:00:00Z");
+    expect(s.listSettings()).toEqual([
+      { key: "curator_name", value: "Sam", updated_at: "2026-10-01T00:00:00Z" },
+      { key: "organisation", value: "Acme Labs", updated_at: "2026-10-02T00:00:00Z" },
+    ]);
+    s.setSetting("organisation", null, "2026-10-03T00:00:00Z");
+    s.setSetting("curator_name", "", "2026-10-03T00:00:00Z");
+    expect(s.listSettings()).toEqual([]);
+  });
+});
+
 describe("SqliteStorage migration", () => {
   it("opens a database created before the newer columns existed, adds them, and keeps the old rows", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");

@@ -14,7 +14,8 @@ import type { CampaignState, PublishedCampaign, Publisher } from "./types.js";
 export interface MailchimpConfig {
   apiKey: string;
   listId: string;
-  fromName: string;
+  /** The sender name, or a function for one that can change while the server runs (the saved brand). */
+  fromName: string | (() => string);
   replyTo: string;
   /** Test hook. */
   fetch?: typeof fetch;
@@ -52,7 +53,7 @@ export class MailchimpPublisher implements Publisher {
     const created = (await this.call("POST", "/campaigns", {
       type: "regular",
       recipients: { list_id: this.cfg.listId },
-      settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.cfg.fromName, reply_to: this.cfg.replyTo },
+      settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.fromName(), reply_to: this.cfg.replyTo },
     }, "create campaign")) as { id: string; web_id: number };
     await this.call("PUT", `/campaigns/${created.id}/content`, { html: draft.html }, "set campaign content");
     return { id: created.id, editUrl: `https://${this.dc}.admin.mailchimp.com/campaigns/edit?id=${created.web_id}`, platform: this.platform };
@@ -66,7 +67,7 @@ export class MailchimpPublisher implements Publisher {
 
   async updateDraft(campaignId: string, draft: Draft): Promise<void> {
     await this.call("PATCH", `/campaigns/${campaignId}`, {
-      settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.cfg.fromName, reply_to: this.cfg.replyTo },
+      settings: { subject_line: draft.subject, title: `${draft.subject} (${draft.name})`, from_name: this.fromName(), reply_to: this.cfg.replyTo },
     }, "update campaign");
     await this.call("PUT", `/campaigns/${campaignId}/content`, { html: draft.html }, "set campaign content");
   }
@@ -90,6 +91,10 @@ export class MailchimpPublisher implements Publisher {
 
   async send(campaignId: string): Promise<void> {
     await this.call("POST", `/campaigns/${campaignId}/actions/send`, undefined, "send campaign");
+  }
+
+  private fromName(): string {
+    return typeof this.cfg.fromName === "function" ? this.cfg.fromName() : this.cfg.fromName;
   }
 
   private async call(method: string, path: string, body: unknown, operation: string): Promise<unknown> {
@@ -125,9 +130,9 @@ const REQUIRED = ["MAILCHIMP_API_KEY", "MAILCHIMP_LIST_ID", "MAILCHIMP_REPLY_TO"
  * set of values is reported rather than thrown, so a settings form with one box left empty
  * cannot stop the server from starting.
  */
-export function mailchimpFromEnv(env: NodeJS.ProcessEnv): MailchimpFromEnv {
+export function mailchimpFromEnv(env: NodeJS.ProcessEnv, defaultFromName: () => string = () => "Volta"): MailchimpFromEnv {
   const missing = REQUIRED.filter((k) => !env[k]);
   if (missing.length === REQUIRED.length) return {};
   if (missing.length) return { problem: `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not set${missing.includes("MAILCHIMP_REPLY_TO") ? " (the verified email on the Mailchimp account)" : ""}` };
-  return { publisher: new MailchimpPublisher({ apiKey: env.MAILCHIMP_API_KEY!, listId: env.MAILCHIMP_LIST_ID!, fromName: env.MAILCHIMP_FROM_NAME || "Volta", replyTo: env.MAILCHIMP_REPLY_TO! }) };
+  return { publisher: new MailchimpPublisher({ apiKey: env.MAILCHIMP_API_KEY!, listId: env.MAILCHIMP_LIST_ID!, fromName: env.MAILCHIMP_FROM_NAME || defaultFromName, replyTo: env.MAILCHIMP_REPLY_TO! }) };
 }

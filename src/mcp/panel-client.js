@@ -4,7 +4,7 @@
 // with textContent, so a title from a source cannot inject markup.
 const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } = globalThis.__mcpApps;
 
-const app = new App({ name: "Volta newsletter review", version: "1.0.0" });
+const app = new App({ name: "Newsletter review", version: "1.0.0" });
 const root = document.getElementById("root");
 let state = null;
 let draft = null;

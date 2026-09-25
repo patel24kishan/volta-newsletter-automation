@@ -32,7 +32,7 @@ describe("an item in the candidate list", () => {
   it("marks ticks, past events and the curator's edits", () => {
     const past = sampleItem({ type: "event", title: "Demo Night", date: "2026-09-17T22:00:00Z", location: "Volta", event_timing: "past", edited_fields: ["summary"] });
     const line = describeItem(past, false, TZ).split("\n")[0]!;
-    expect(line).toBe("- [ ] Demo Night | held 2026-09-17 19:00 at Volta | edited by Bader: description");
+    expect(line).toBe("- [ ] Demo Night | held 2026-09-17 19:00 at Volta | edited by you: description");
   });
 });
 
@@ -97,14 +97,14 @@ describe("the rules Claude is given", () => {
 
   it("forbid offering to write copy, and ask for the list to be shown rather than summarised", () => {
     expect(INSTRUCTIONS).toMatch(/never offer to write, rewrite or "fill in" copy/);
-    expect(INSTRUCTIONS).toMatch(/For add_source, use only what Bader gives you/);
-    expect(INSTRUCTIONS).toMatch(/never invent a feed and never add one he did not name/);
+    expect(INSTRUCTIONS).toMatch(/For add_source, use only what the curator gives you/);
+    expect(INSTRUCTIONS).toMatch(/never invent a feed and never add one they did not name/);
     expect(INSTRUCTIONS).toMatch(/never let its empty section pass as/);
     // Bader says a few words, not a sentence: each short phrase must land on one tool.
     expect(INSTRUCTIONS).toMatch(/"sources", "list sources", "what do we read\?" -> list_sources/);
     expect(INSTRUCTIONS).toMatch(/"add source", "add feed", "add calendar", "add channel", or a link on its own -> add_source/);
     expect(INSTRUCTIONS).toMatch(/"turn off X", "pause X", "turn on X" -> set_source/);
-    expect(INSTRUCTIONS).toMatch(/"remove source", "delete source", "stop reading X" -> remove_source, after he has said to/);
+    expect(INSTRUCTIONS).toMatch(/"remove source", "delete source", "stop reading X" -> remove_source, after they have said to/);
     expect(INSTRUCTIONS).toMatch(/"refresh", "refresh this month", "fetch again" -> prepare_month with force/);
     expect(INSTRUCTIONS).toMatch(/ask only for what is missing/);
 
@@ -115,9 +115,9 @@ describe("the rules Claude is given", () => {
     expect(INSTRUCTIONS).toMatch(/-> edit_item on that event/);
     expect(INSTRUCTIONS).toMatch(/Never add_event again to correct one/);
     expect(INSTRUCTIONS).toMatch(/"remove that event", "delete that event"/);
-    expect(INSTRUCTIONS).toMatch(/-> remove_event, after he has said to/);
+    expect(INSTRUCTIONS).toMatch(/-> remove_event, after they have said to/);
 
-    expect(INSTRUCTIONS).toMatch(/note to editor \(not printed\)" are advice for Bader/);
+    expect(INSTRUCTIONS).toMatch(/note to editor \(not printed\)" are advice for the curator/);
     expect(INSTRUCTIONS).toMatch(/Do not replace the list with a summary/);
   });
 });

@@ -76,7 +76,7 @@ export function panelHtml(): string {
   cached = [
     "<!DOCTYPE html>",
     '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
-    "<title>Volta newsletter review</title>",
+    "<title>Newsletter review</title>",
     `<style>${CSS}</style></head>`,
     '<body><main id="root"><p class="muted">Loading the candidates…</p></main>',
     // Two module scripts: they run in order but keep separate scopes, so the library's minified

@@ -96,7 +96,7 @@ describe("the newsletter tools, as Claude uses them", () => {
   it("offers the tools with the rules as instructions, and takes no newsletter text where it must not", async () => {
     const c = await connect();
     const { tools } = await c.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_event", "remove_source", "send_campaign", "set_selection", "set_source"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["add_event", "add_source", "approve_draft", "build_draft", "edit_item", "list_candidates", "list_sources", "monthly_reminder", "newsletter_status", "prepare_month", "remove_event", "remove_source", "send_campaign", "set_selection", "set_source", "set_up_newsletter"]);
     expect(c.client.getInstructions()).toBe(INSTRUCTIONS);
     expect(INSTRUCTIONS).toMatch(/Never write newsletter text yourself/);
     // Building, approving and sending take ids only: Claude cannot hand them words to publish.
@@ -249,7 +249,7 @@ describe("the newsletter tools, as Claude uses them", () => {
     expect(openHouse, "the added event should be listed").toBeDefined();
     expect((await c.call("edit_item", { item_id: openHouse!, field: "link", text: "lu.ma/open-house" })).text).toContain("https://lu.ma/open-house");
 
-    expect((await c.call("edit_item", { item_id: mixer, field: "summary", text: "Drinks, demos and the whole fall cohort." })).text).toMatch(/edited by Bader: description/);
+    expect((await c.call("edit_item", { item_id: mixer, field: "summary", text: "Drinks, demos and the whole fall cohort." })).text).toMatch(/edited by you: description/);
     expect((await c.call("edit_item", { item_id: mixer, field: "title", text: "Party" })).isError).toBe(true);
 
     const built = await c.call("build_draft");
@@ -325,7 +325,7 @@ describe("the newsletter tools, as Claude uses them", () => {
     const key2 = /Draft key: (\S+)/.exec((await c.call("build_draft")).text)![1]!;
     const updated = await c.call("approve_draft", { draft_key: key2 });
     expect(updated.text).toContain("campaign camp_1 in Mailchimp was updated with the new version (still not sent): https://mc.test/e");
-    expect(updated.text).toMatch(/changes Bader made directly in Mailchimp have been replaced/);
+    expect(updated.text).toMatch(/changes made directly in Mailchimp have been replaced/);
     expect(mail.published).toHaveLength(1);
     expect(mail.updated.map((u) => u.id)).toEqual(["camp_1"]);
     expect(mail.updated[0]!.draft.html).toContain("Drinks, demos and the whole fall cohort.");
@@ -544,7 +544,7 @@ describe("the sources Bader manages himself", () => {
 
       const refused = await c.call("remove_source", { source_id: "cur_entrevestor", confirm: false });
       expect(refused.isError).toBe(true);
-      expect(refused.text).toContain("only once Bader has said to remove it");
+      expect(refused.text).toContain("only once the curator has said to remove it");
       expect((await c.call("remove_source", { source_id: "cur_entrevestor", confirm: true })).text).toContain("Removed Entrevestor");
       expect((await c.call("list_sources")).text).not.toContain("Entrevestor");
       await c.close();
@@ -909,7 +909,7 @@ describe("a refresh, as Bader sees it afterwards", () => {
       expect(after.text, "the same event, under the same id").toContain(mixer!);
       expect(after.text).toContain("[x]");
       expect(after.text).toContain("Bader's own words about the mixer.");
-      expect(after.text).toContain("edited by Bader: description");
+      expect(after.text).toContain("edited by you: description");
       await c.close();
     } finally {
       BODIES["https://cal.test/ics"] = saved;

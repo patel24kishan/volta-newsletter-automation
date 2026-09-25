@@ -3,6 +3,7 @@
  * pass a recorder. The Bolt wrapper (slack.ts) adapts real payloads to these.
  * Every post goes through assertLive: dry-run never reaches a human (CLAUDE.md section 4).
  */
+import type { Brand } from "../brand.js";
 import type { Alerter } from "../alerts.js";
 import type { Cadence, SourceConfig } from "../config.js";
 import type { Draft } from "../draft/templates.js";
@@ -26,6 +27,8 @@ export interface SlackClient {
 export interface SurfaceState {
   candidates: RankedItem[];
   timeZone: string;
+  /** The names the newsletter prints; refreshed on every MCP call from the saved settings. */
+  brand?: Brand;
   outDir: string;
   /** The current draft, by the key its Approve button carries, so Approve can find it. */
   drafts: Map<string, DraftRecord>;
