@@ -1,0 +1,88 @@
+{
+  "manifest_version": "0.4",
+  "name": "volta-newsletter",
+  "display_name": "Volta Newsletter",
+  "version": "0.1.0",
+  "description": "A monthly newsletter reviewed inside Claude: gathers, dedupes and drafts from your sources; you pick items and press send.",
+  "long_description": "No AI writes newsletter text. Items are taken from real sources (news feeds, calendars, LinkedIn, Slack, and events you add yourself) and put into fixed templates, and a verifier rejects any name, date or link that isn't in a source or in your own words. Runs as Volta's newsletter by default; say \"set up the newsletter\" in chat to name your own organisation instead — that takes effect at once and needs no reinstall. Starts in dry run: nothing reaches Mailchimp until you turn on live mode below.",
+  "author": {
+    "name": "patel24kishan",
+    "url": "https://github.com/patel24kishan"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patel24kishan/volta-newsletter-automation.git"
+  },
+  "keywords": ["newsletter", "mailchimp", "email", "volta"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/cli/main.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/cli/main.js", "serve"],
+      "env": {
+        "MAILCHIMP_API_KEY": "${user_config.mailchimp_api_key}",
+        "MAILCHIMP_LIST_ID": "${user_config.mailchimp_list_id}",
+        "MAILCHIMP_REPLY_TO": "${user_config.mailchimp_reply_to}",
+        "MAILCHIMP_FROM_NAME": "${user_config.mailchimp_from_name}",
+        "SLACK_BOT_TOKEN": "${user_config.slack_bot_token}",
+        "ALLOW_LIVE": "${user_config.live_mode}",
+        "VOLTA_NEWSLETTER_HOME": "${user_config.data_dir}"
+      }
+    }
+  },
+  "user_config": {
+    "mailchimp_api_key": {
+      "type": "string",
+      "title": "Mailchimp API key",
+      "description": "From Mailchimp → Account → Extras → API keys. Its suffix (-us21) names the data centre. Leave empty to run without Mailchimp — approve then saves the newsletter as a file instead.",
+      "sensitive": true,
+      "required": false
+    },
+    "mailchimp_list_id": {
+      "type": "string",
+      "title": "Mailchimp audience (list) ID",
+      "description": "The audience the newsletter goes to.",
+      "required": false
+    },
+    "mailchimp_reply_to": {
+      "type": "string",
+      "title": "Reply-to address",
+      "description": "The verified email address on the Mailchimp account.",
+      "required": false
+    },
+    "mailchimp_from_name": {
+      "type": "string",
+      "title": "Sender name",
+      "description": "Optional. The organisation's name is used when this is left empty.",
+      "required": false
+    },
+    "slack_bot_token": {
+      "type": "string",
+      "title": "Slack bot token",
+      "description": "Only needed if a Slack channel is one of your sources. A bot token (xoxb-) with channels:history, channels:read and users:read.",
+      "sensitive": true,
+      "required": false
+    },
+    "live_mode": {
+      "type": "boolean",
+      "title": "Live mode",
+      "description": "On: approve creates a real Mailchimp campaign and send reaches your real audience. Off (the default): nothing leaves this computer.",
+      "default": false,
+      "required": false
+    },
+    "data_dir": {
+      "type": "directory",
+      "title": "Data folder",
+      "description": "Where your sources, ticks, edits and settings are kept. Kept outside this extension, so an update never touches it. Defaults to a folder in your user profile.",
+      "default": "${HOME}/Volta Newsletter",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=22.13.0"
+    }
+  }
+}

@@ -102,6 +102,14 @@ On Windows, end with `-- cmd /c npx -y volta-newsletter`.
 Install it once instead: `npm install -g volta-newsletter`, then use `"command": "volta-newsletter"`
 with no `args` in any of the configs above.
 
+### Claude Desktop, one click
+
+A `.mcpb` file wraps the same code above into a Claude Desktop extension: double-click it, and
+Claude asks for the Mailchimp and Slack values in a form instead of a config file, storing the
+secret ones in the OS keychain rather than in plain text. It is built from a checkout
+(see Developing below) and is not yet published anywhere to download; until then, use the `npx`
+config above.
+
 ## The first chat
 
 Say **"newsletter status"**. On a fresh install it answers that the newsletter is not set up yet
@@ -268,6 +276,7 @@ The one kind that can't be finished alone, so the tool walks the curator through
 | **The email** | The subject is the month — *"Volta this month: September 2026"* — never an item's title. Upcoming events run soonest first; past events, news and updates newest first; the two are never mixed. |
 | **Set-up** | The organisation, newsletter, curator and sender names are settings, saved once in chat, read on every call, kept across updates. Volta's are the defaults. Credentials are never settings. |
 | **MCP server** | 16 tools: `newsletter_status`, `set_up_newsletter`, `prepare_month`, `list_candidates`, `set_selection`, `add_event`, `edit_item`, `remove_event`, `build_draft`, `approve_draft`, `send_campaign`, `monthly_reminder`, `list_sources`, `add_source`, `set_source`, `remove_source`. |
+| **Claude Desktop extension (`.mcpb`)** | `npm run pack:mcpb` wraps the compiled package into a one-file, double-click install: a settings form for the Mailchimp and Slack values, secrets kept in the OS keychain, live mode as a toggle, and a folder picker for where the data lives. Built from a checkout; not yet published for download. |
 | **Review panel** | In Claude Desktop, an interactive checklist in the chat: tick, edit wording, add or remove an event, build, and read the finished newsletter in the panel itself. A tick sends only that one change, so nothing off screen can be lost. |
 | **Editing** | The curator changes an item's summary, date/time, location or link in their own words. Edits survive rebuilds and re-fetches. An event they added is **corrected**, never added again. They can attach an image (https link or a local jpg/png/gif up to 5 MB). |
 | **Mailchimp** | Approve creates a draft campaign; approving again updates the **same** campaign. Before deciding, it asks Mailchimp what it actually holds: a campaign deleted there is replaced with a fresh one instead of blocking the month, and a month already sent is refused. A send recorded here is final. |
@@ -286,11 +295,17 @@ Copy-Item .env.example .env    # then fill in Mailchimp and Slack values
 npm run gate                   # typecheck + all tests
 npm run lint
 npm run build                  # compiles to dist/, what the package ships
+npm run pack:mcpb               # builds, then wraps dist/ into dist-mcpb/volta-newsletter.mcpb
 ```
 
 The gate runs the review panel's own script (`test/panel-client.test.ts`) against a stand-in for
 the browser, starts the real entry point over stdio from another folder
-(`test/entry-point.int.test.ts`), and builds and drives the compiled package (`test/dist.int.test.ts`).
+(`test/entry-point.int.test.ts`), builds and drives the compiled package (`test/dist.int.test.ts`),
+and validates the extension manifest against `@anthropic-ai/mcpb`'s own schema
+(`test/manifest.test.ts`). `pack:mcpb` is exercised by hand, not on every test run: it stages
+`dist/`, `config/`, `package.json` and `manifest.json`, runs `npm ci --omit=dev` there so only
+production dependencies are in the bundle, and packs the result. In Claude Desktop, remove any
+`npx` or checkout entry first, then double-click the `.mcpb` file to install it.
 
 To run the **checkout** in Claude Desktop rather than the package, quit Claude, run one of these,
 and reopen it. The checkout keeps its data in `./out` and reads `demo/config.json`:
@@ -308,9 +323,8 @@ already been sent** (it should refuse and say subscribers have it).
 
 ## Next (not built yet)
 
-- **A Claude Desktop extension (`.mcpb`)**: the same compiled package wrapped for one-click install,
-  with the settings above in a form and the secrets in the app's keychain. The reminder still needs
-  one of the routes above; a manifest cannot create a scheduled task.
+- **Publish the `.mcpb`** somewhere a friend can download it, rather than building it from a
+  checkout. It is not signed (`mcpb sign` needs a certificate).
 - **Retire the old Slack review surface** (`src/surface/slack.ts` and friends), once the Claude path
   is proven in real use.
 - **A short guide for the curator.**
