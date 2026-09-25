@@ -87,25 +87,121 @@ Not built. Each stays out of the pipeline until picked up; nothing here changes 
 
 Bader's review moved out of Slack and into the Claude app, through an MCP server (`src/mcp/`,
 `npm run mcp`). Phases 1–3 are built, pushed and QA'd four times: the surface-free review core, the
-fourteen tools, and the monthly scheduled task. Three phases remain, none started.
+fifteen tools, and `monthly_reminder` with its once-a-period marks. Three phases remain, none
+started.
+
+One correction to what phase 3 was taken to have delivered: the tool that greets Bader exists and
+is tested, but **the scheduled task that calls it does not exist on the curator's machine**. Only a
+disabled one-time demo from 22 September is there, so nothing fires by itself. Phase 4 below treats
+that as its own problem rather than a packaging detail.
 
 ### Phase 4: the install package for Bader
 
 Half of it exists. `bin/add-to-claude-config.mjs` writes a `claude_desktop_config.json` entry,
-which is what we install for testing. Nothing exists for the `.mcpb` Desktop Extension: no
-manifest, no bundle, no `user_config` entries for the Mailchimp key, list id, reply-to address and
-Slack token, no install-time creation of the monthly reminder task, and no way to carry his
-database across an update.
+which is what we install for testing, and `bin/mcp-server.mjs` is the launcher it points at.
+Nothing exists for the `.mcpb` Desktop Extension: no manifest, no bundle, no `user_config` entries
+for the Mailchimp key, list id, reply-to address and Slack token, and no way to carry his database
+across an update.
 
-Two things to check before building any of it: whether the Microsoft Store build of Claude supports
-extensions at all, and whether a scheduled run raises a desktop notification — the whole monthly
-trigger rests on Bader noticing one. Note also that the settings form holds flat values only, so
-sources stay where they are, added in chat.
+#### What is settled, and on what evidence
 
-**Settle `catch_up_days` first.** It is a config setting (1–31, default 7) added for the September
-demo and since put back to 7 in `demo/config.json`. At 31 a month's reminder would go on catching
-up into the following month and could overlap the next one. Decide whether Bader's packaged install
-exposes the setting at all or fixes it at 7.
+**The Microsoft Store build does support extensions.** Checked against the curator's own
+installation rather than documentation: its log shows `Starting periodic extension update checks`
+and `Checking 0 extensions via can_install API`, and it keeps an `extensions-blocklist.json` with
+an `is_internal_dxt` field. Zero extensions because none are installed, not because it cannot.
+
+**Scheduled tasks do fire unattended.** A one-time task with `fireAt 2026-09-22T14:54:30Z` produced
+a run at `14:55:08Z` with status `succeeded`, nobody watching. What is *not* known is whether such
+a run raises a desktop notification, and the whole monthly trigger rests on Bader noticing one.
+That question needs a human watching a screen and is the first thing step 0 answers.
+
+**`catch_up_days` is fixed at 7, not exposed.** At 31, `dueWindow` puts `giveUpAt` past the next
+month's start, so a month can never be marked missed and its late greeting can overlap the next
+month's. That is a bug rather than a preference, and the setting exists only because a demo needed
+to greet three weeks late. The maintainer keeps the knob in `demo/config.json`; it does not reach
+the settings form, where a number with no visible effect until something is missed would invite
+being set to 31 "to be safe".
+
+**A manifest cannot create a scheduled task.** `manifest_version` 0.3 has no field for tasks, hooks
+or post-install actions, and a privately distributed bundle has no install-time hook either. So the
+reminder stays something Bader asks Claude to set up, and what the install adds is the newsletter
+*noticing* when it is missing — see the heartbeat below.
+
+The manifest format itself was read from the spec, not recalled: `manifest_version` `"0.3"`;
+required `name`, `version`, `description`, `author`, `server`; `server.type` of `node` with an
+`entry_point` and an `mcp_config` carrying `command`, `args` and `env`; `${user_config.KEY}`,
+`${__dirname}` and `${HOME}` substituted into either `args` or `env`; `user_config` entries typed
+`string` | `number` | `boolean` | `directory` | `file`, with `sensitive` marking a value the app
+stores in the OS keychain. The CLI is `@anthropic-ai/mcpb` (`init`, `validate`, `pack`, `sign`),
+and `pack` does not run `npm install`, so `node_modules` must already be in the directory it packs.
+
+#### Design decisions
+
+**Compile with `tsc`; do not ship `tsx`.** Two runtime file reads decide this: `src/mcp/panel.ts`
+resolves `@modelcontextprotocol/ext-apps/app-with-deps` through `createRequire` and reads
+`panel-client.js` from beside itself. A single-file bundler breaks both; plain `tsc` emit plus one
+file copy keeps them working untouched. Shipping `tsx` would also put esbuild's platform-specific
+native binary in the bundle and tie start-up to whatever Node the app hands the extension.
+
+**Bader's data lives outside the bundle.** The bundle directory is replaced on every update, so a
+`directory` setting points `DATABASE_PATH` and `OUT_DIR` at a folder of his own, defaulting to
+`${HOME}/Volta Newsletter`, falling back to `%LOCALAPPDATA%` if the value arrives empty or
+unsubstituted. `SqliteStorage` creates its tables idempotently, so an existing database opens as-is.
+
+**Credentials arrive as environment variables, and `.env` is skipped when packaged.** Every
+credential already reaches the code through an injected `env` object, so the change is confined to
+the entry point. Seven settings: the four Mailchimp values, the Slack bot token, a `live_mode`
+boolean defaulting to false, and the data directory. All the Mailchimp fields are optional on
+purpose, because today `mailchimpFromEnv` **throws** when the key and list are set but reply-to is
+empty — a half-filled form would kill the server at start-up and show Bader "Connection closed" and
+nothing else. That throw becomes an alert plus "no publisher", and `newsletter_status` names the
+missing field.
+
+**The reminder is made loud rather than automatic.** `monthly_reminder` records a heartbeat mark on
+every call, and `newsletter_status` gains a line: the date it last ran, or "has never run on this
+computer" with the recipe for setting it up. This is constraint 8 applied to the one thing that
+currently fails silently.
+
+#### Build order
+
+**Step 0 — a throwaway probe extension.** One manifest with a sensitive string, a boolean and a
+directory default, and one tool reporting `process.version`, `process.execPath`, whether
+`node:sqlite` resolves, and how each setting actually arrived. Installed and watched by a human. It
+answers, in one go: the Node version, whether the Store build permits a local install, the exact
+form a boolean and an empty optional take, whether `${HOME}` is substituted on Windows, whether
+settings survive installing a newer bundle over an older one, and whether a scheduled run raises a
+notification. Three of those can change the design, so nothing else starts until it has run.
+
+1. **Env from the environment.** `src/install/env.ts` normalising the seven values, the entry point
+   using it, `mailchimpFromEnv` returning a result instead of throwing, `.env.example` split into
+   Bader's five and the maintainer's rest. Integration test starts the real entry point as a child
+   process over stdio with no `.env` present.
+2. **Compiled build.** `tsconfig.build.json`, a build script, and an integration test that runs it,
+   starts `dist/cli/mcp-server.js` over stdio, expects the fifteen tools and reads the panel
+   resource — which proves the `createRequire` and file-copy paths survive compilation.
+3. **Manifest and bundle.** A test asserting every `${user_config.X}` has a matching entry and that
+   the env names equal the list in `src/install/env.ts`. Then install the `.mcpb` by hand, having
+   first removed the dev config entry so two servers do not collide under one name.
+4. **Reminder heartbeat and recipe.** The status line and the set-up text. *This is the step that
+   makes something fire on the first of a month.*
+5. **A notification fallback**, only if step 0 says none appears.
+6. **Docs and a release routine.**
+
+#### Risks that would invalidate the design, cheapest check first
+
+1. **The extension runtime lacks `node:sqlite`.** It needs Node 22.13 or newer unflagged. The app's
+   own Node is 24.18.1, but that is Electron's and not necessarily what an extension gets. Step 0
+   settles it; if it fails, storage needs a driver behind the existing `Storage` interface.
+2. **The Store build refuses a local install** (an organisation policy, an allowlist). Step 0. The
+   fallback is the config-entry path that already works, plus Node installed on his machine.
+3. **A scheduled task cannot reach extension tools.** Two subsystems appear in the app's log
+   (`[ScheduledTasks]` and `[CCDScheduledTasks]`); the one Bader needs is the kind that runs on this
+   computer. Step 0's one-time task settles which he gets.
+4. **No desktop notification on a scheduled run.** Step 0; triggers step 5.
+5. **Settings lost when a newer bundle is installed over an older one.** Step 0.
+6. **A half-filled form crashes start-up.** Designed out in step 1.
+7. **The dev config entry and the extension collide** under the same server name. A manual step in
+   step 3.
 
 ### Phase 5: retire the Slack review surface
 
