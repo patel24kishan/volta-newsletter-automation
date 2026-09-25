@@ -86,7 +86,8 @@ export async function startSurface(o: SurfaceOptions): Promise<Surface> {
   }
 
   // A misconfigured key throws here for both commands: that is a mistake to fix, not an outage.
-  const pending = mailchimpFromEnv(env);
+  const { publisher: pending, problem: mailProblem } = mailchimpFromEnv(env);
+  if (mailProblem) throw new Error(mailProblem);
   let alertedOutage = false;
   const connectEmail = async (): Promise<void> => {
     if (!pending || st.publisher) return;

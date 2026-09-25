@@ -111,11 +111,23 @@ export class MailchimpPublisher implements Publisher {
   }
 }
 
-/** Build from env, or undefined when Mailchimp is not configured (file-only demo). */
-export function mailchimpFromEnv(env: NodeJS.ProcessEnv): MailchimpPublisher | undefined {
-  const { MAILCHIMP_API_KEY: apiKey, MAILCHIMP_LIST_ID: listId } = env;
-  if (!apiKey || !listId) return undefined;
-  const replyTo = env.MAILCHIMP_REPLY_TO;
-  if (!replyTo) throw new Error("MAILCHIMP_REPLY_TO must be set (the verified email on the Mailchimp account)");
-  return new MailchimpPublisher({ apiKey, listId, fromName: env.MAILCHIMP_FROM_NAME || "Volta", replyTo });
+export interface MailchimpFromEnv {
+  /** Present when every required value is set. */
+  publisher?: MailchimpPublisher;
+  /** Present when some values are set but not all: what is missing, in the curator's words. */
+  problem?: string;
+}
+
+const REQUIRED = ["MAILCHIMP_API_KEY", "MAILCHIMP_LIST_ID", "MAILCHIMP_REPLY_TO"] as const;
+
+/**
+ * Build from env. Nothing set means "not configured" (approve saves the file only); a half-filled
+ * set of values is reported rather than thrown, so a settings form with one box left empty
+ * cannot stop the server from starting.
+ */
+export function mailchimpFromEnv(env: NodeJS.ProcessEnv): MailchimpFromEnv {
+  const missing = REQUIRED.filter((k) => !env[k]);
+  if (missing.length === REQUIRED.length) return {};
+  if (missing.length) return { problem: `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not set${missing.includes("MAILCHIMP_REPLY_TO") ? " (the verified email on the Mailchimp account)" : ""}` };
+  return { publisher: new MailchimpPublisher({ apiKey: env.MAILCHIMP_API_KEY!, listId: env.MAILCHIMP_LIST_ID!, fromName: env.MAILCHIMP_FROM_NAME || "Volta", replyTo: env.MAILCHIMP_REPLY_TO! }) };
 }

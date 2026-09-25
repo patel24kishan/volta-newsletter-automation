@@ -1,0 +1,96 @@
+{
+  "timezone": "America/Halifax",
+  "cadence": "monthly",
+  "draft_layout": "events-first",
+  "send_day": "monday",
+  "reminder_time": "08:30",
+  "catch_up_days": 7,
+  "content_window_days": 7,
+  "events_window_days": 14,
+  "watchlist": [
+    "Volta",
+    "voltaeffect"
+  ],
+  "holiday_overrides": [
+    "2026-10-12",
+    "2026-12-28",
+    "2026-12-29",
+    "2026-12-30",
+    "2026-12-31"
+  ],
+  "alert_recipients": [
+    "bader",
+    "maintainer"
+  ],
+  "sources": [
+    {
+      "id": "news-volta",
+      "kind": "google_news",
+      "type": "news",
+      "enabled": true,
+      "url": "",
+      "terms": [
+        "Volta Halifax"
+      ]
+    },
+    {
+      "id": "news-volta-effect",
+      "kind": "google_news",
+      "type": "news",
+      "enabled": true,
+      "url": "",
+      "terms": [
+        "Volta Effect"
+      ]
+    },
+    {
+      "id": "news-volta-labs",
+      "kind": "google_news",
+      "type": "news",
+      "enabled": true,
+      "url": "",
+      "terms": [
+        "Volta Labs Halifax"
+      ]
+    },
+    {
+      "id": "volta-calendar",
+      "kind": "ics",
+      "type": "event",
+      "url": "https://calendar.voltaeffect.com/api/calendar/ics",
+      "fallback_link": "https://voltaeffect.com/events",
+      "enabled": true
+    },
+    {
+      "id": "manual-events",
+      "kind": "manual",
+      "type": "event",
+      "url": "",
+      "fallback_link": "https://voltaeffect.com/events",
+      "enabled": true
+    },
+    {
+      "id": "member-updates",
+      "kind": "slack_channel",
+      "type": "member_social",
+      "url": "",
+      "enabled": true,
+      "channel_id": "C0C2H7WAUJX"
+    },
+    {
+      "id": "volta-linkedin",
+      "kind": "linkedin_company",
+      "type": "linkedin",
+      "url": "https://www.linkedin.com/company/voltaeffect/",
+      "enabled": true
+    }
+  ],
+  "local_terms": [
+    "Halifax",
+    "Nova Scotia",
+    "Dartmouth",
+    "Atlantic Canada",
+    "N.S.",
+    "NS"
+  ]
+}

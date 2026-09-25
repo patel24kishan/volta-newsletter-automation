@@ -72,10 +72,13 @@ describe("MailchimpPublisher", () => {
     await expect(p.publishDraft(draft)).rejects.toThrow(/create campaign failed \(HTTP 400\).*reply_to: must be a verified address/);
   });
 
-  it("mailchimpFromEnv is undefined when unset and requires a reply-to when set", () => {
-    expect(mailchimpFromEnv({})).toBeUndefined();
-    expect(() => mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1" })).toThrow(/MAILCHIMP_REPLY_TO/);
-    expect(mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1", MAILCHIMP_REPLY_TO: "a@b.c" })?.platform).toBe("Mailchimp");
+  it("mailchimpFromEnv is empty when unset, names what is missing when half set, and never throws", () => {
+    expect(mailchimpFromEnv({})).toEqual({});
+    const half = mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1" });
+    expect(half.publisher).toBeUndefined();
+    expect(half.problem).toBe("MAILCHIMP_REPLY_TO is not set (the verified email on the Mailchimp account)");
+    expect(mailchimpFromEnv({ MAILCHIMP_REPLY_TO: "a@b.c" }).problem).toBe("MAILCHIMP_API_KEY and MAILCHIMP_LIST_ID are not set");
+    expect(mailchimpFromEnv({ MAILCHIMP_API_KEY: "k-us21", MAILCHIMP_LIST_ID: "L1", MAILCHIMP_REPLY_TO: "a@b.c" }).publisher?.platform).toBe("Mailchimp");
   });
 
   /**

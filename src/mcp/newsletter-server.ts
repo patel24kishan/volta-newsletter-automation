@@ -92,6 +92,8 @@ export interface NewsletterDeps {
   /** How a single source is read when add_source checks it. Injected so tests need no network. */
   fetchText?: (url: string) => Promise<string>;
   publisher?: Publisher;
+  /** Why there is no publisher although some of its settings are filled in: named, so the curator knows which box to fill. */
+  publisherProblem?: string;
   /** The audience the platform will send to, read once at startup, for the approval message. */
   audience?: { audienceName: string; memberCount: number };
   /** Started on first use, so a chat that never builds a draft never opens a port. */
@@ -265,7 +267,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       `Reads: news and posts ${describeWindow(w.content, tz)}; upcoming events ${describeWindow(w.upcoming, tz)}${w.past ? `; past events ${describeWindow(w.past, tz)}` : ""}.`,
       draft ? `Draft: "${draft.draft.subject}" (key ${draft.key})${draft.campaign ? `, campaign ${draft.campaign.id} in ${draft.campaign.platform}: ${draft.campaign.editUrl}` : ", not approved yet"}.` : "Draft: none built yet.",
       `Mode: ${isLive(d.env) ? "LIVE: approve creates a real campaign and send emails the audience." : "dry run: nothing is created in or sent from the email platform."}`,
-      `Email platform: ${d.publisher ? d.publisher.platform : "not configured (approve saves the file only)"}.`,
+      `Email platform: ${d.publisher ? d.publisher.platform : `not configured (${d.publisherProblem ? `${d.publisherProblem}; ` : ""}approve saves the file only)`}.`,
     ];
     return text(lines.join("\n"));
   });
