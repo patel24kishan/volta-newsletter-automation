@@ -1,12 +1,19 @@
 {
   "name": "volta-newsletter",
   "version": "0.1.0",
-  "private": true,
-  "description": "Unattended weekly newsletter pipeline for Volta. Bader selects items and presses send; everything else runs on its own.",
+  "description": "A monthly newsletter reviewed inside your assistant (Claude, Cursor, Codex, Claude Code) as an MCP server: it gathers, dedupes and drafts; the curator picks items and presses send.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
+  "bin": {
+    "volta-newsletter": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "config",
+    "README.md"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
@@ -19,7 +26,9 @@
     "fixtures:record": "tsx src/cli/record-fixtures.ts",
     "demo:slack": "tsx src/cli/demo-slack.ts",
     "serve": "tsx src/cli/serve.ts",
-    "mcp": "node bin/mcp-server.mjs"
+    "mcp": "node bin/mcp-server.mjs",
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run gate && npm run lint && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
@@ -28,12 +37,12 @@
     "tsx": "^4.0.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@slack/bolt": "^5.1.0"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@slack/bolt": "^5.1.0",
     "date-holidays": "^3.36.1",
     "fast-xml-parser": "^5.11.1",
     "zod": "^4.6.5"

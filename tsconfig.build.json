@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "src/surface/slack.ts",
+    "src/cli/start-surface.ts",
+    "src/cli/serve.ts",
+    "src/cli/demo-slack.ts",
+    "src/cli/demo-week.ts",
+    "src/cli/check-sources.ts",
+    "src/cli/record-fixtures.ts"
+  ]
+}
