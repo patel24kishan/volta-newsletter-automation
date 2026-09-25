@@ -43,6 +43,7 @@ import { greetingText, missedText, nothingDueText } from "../review/reminder.js"
 import { loadCampaigns, loadReview, restoreSession } from "../surface/session.js";
 import { isManualItem } from "../manual-events.js";
 import { PANEL_MIME, PANEL_URI, panelHtml, PREVIEW_URI } from "./panel.js";
+import { recipeFor } from "../reminder/recipes.js";
 import { brandFor, readSettings, saveSetup, settingsStatusLine, setupPreview, validateSetup } from "../settings.js";
 
 export const SERVER_NAME = "volta-newsletter";
@@ -50,6 +51,9 @@ export const SERVER_NAME = "volta-newsletter";
 /** Once-per-period records for the reminder (storage table schedule_marks). */
 const REMINDER_TASK = "claude-reminder";
 const MISSED_TASK = "claude-reminder-missed";
+/** Every call of monthly_reminder, whichever route: newsletter_status says when it last ran, or that it never has. */
+const HEARTBEAT_TASK = "reminder-heartbeat";
+const ROUTE_LABEL: Record<string, string> = { "claude-task": "the app's scheduled task", "os-scheduler": "the OS scheduler" };
 /** A greeting that started and never finished (the app closed mid-run) can be retried after this. */
 const CLAIM_MS = 10 * 60 * 1000;
 
@@ -102,6 +106,10 @@ export interface NewsletterDeps {
   audience?: { audienceName: string; memberCount: number };
   /** Started on first use, so a chat that never builds a draft never opens a port. */
   preview?: () => Promise<{ put(html: string, id?: string): string } | undefined>;
+  /** Which route called monthly_reminder, for the heartbeat: the app's scheduled task (default) or an OS scheduler. */
+  reminderRoute?: "claude-task" | "os-scheduler";
+  /** For the set-up recipe in newsletter_status; the real one when absent. */
+  platform?: NodeJS.Platform;
 }
 
 type ToolText = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
@@ -259,6 +267,17 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
     return w;
   }
 
+  /** When the reminder last ran, by either route, or the one line that sets it up. */
+  function reminderLine(): string {
+    const mark = d.storage.getMark(HEARTBEAT_TASK, "last");
+    if (!mark?.done_at) return `Reminder: has never run on this computer, so nothing announces the ${periodWord} by itself. ${recipeFor(d.platform ?? process.platform).oneLine}`;
+    let route = "claude-task";
+    try { route = (JSON.parse(mark.payload ?? "{}") as { route?: string }).route ?? route; } catch { /* a mark without a payload */ }
+    const p = partsInZone(new Date(mark.done_at), tz);
+    const two = (n: number) => String(n).padStart(2, "0");
+    return `Reminder last ran: ${p.year}-${two(p.month)}-${two(p.day)} ${two(p.hour)}:${two(p.minute)} ${city} time (${ROUTE_LABEL[route] ?? route}).`;
+  }
+
   const notPrepared = () => text(`This ${periodWord}'s newsletter has not been prepared yet. Call prepare_month first.`, true);
 
   server.registerTool("newsletter_status", {
@@ -280,6 +299,7 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
       draft ? `Draft: "${draft.draft.subject}" (key ${draft.key})${draft.campaign ? `, campaign ${draft.campaign.id} in ${draft.campaign.platform}: ${draft.campaign.editUrl}` : ", not approved yet"}.` : "Draft: none built yet.",
       `Mode: ${isLive(d.env) ? "LIVE: approve creates a real campaign and send emails the audience." : "dry run: nothing is created in or sent from the email platform."}`,
       `Email platform: ${d.publisher ? d.publisher.platform : `not configured (${d.publisherProblem ? `${d.publisherProblem}; ` : ""}approve saves the file only)`}.`,
+      reminderLine(),
     ];
     return text(lines.join("\n"));
   });
@@ -333,6 +353,9 @@ export function createNewsletterServer(d: NewsletterDeps): McpServer {
   }, async () => {
     const st = await current();
     const now = d.clock.now();
+    // The heartbeat comes before any decision, so "never run" in newsletter_status means exactly that.
+    d.storage.completeMark(HEARTBEAT_TASK, "last", now.toISOString());
+    d.storage.setMarkPayload(HEARTBEAT_TASK, "last", JSON.stringify({ route: d.reminderRoute ?? "claude-task" }));
     const key = st.week!;
     const greeted = Boolean(d.storage.getMark(REMINDER_TASK, key)?.done_at);
     const decision = whatIsDue(now, d.config, { reminderSent: greeted });

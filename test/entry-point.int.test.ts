@@ -62,6 +62,22 @@ describe("the entry point, started by a host", { timeout: 60_000 }, () => {
     }
   });
 
+  it("ignores a checkout's .env when the data directory is named in the environment", async () => {
+    // The regression: a run given its own folder was still opened on the checkout's real database,
+    // because the working directory's .env named DATABASE_PATH. An explicit data directory wins.
+    const data = join(dir, "data");
+    const cwd = join(dir, "elsewhere");
+    writeFileSync(join(cwd, ".env"), "DATABASE_PATH=./checkout.sqlite\nDEMO_NOW=2026-11-02T11:30:00Z\n");
+    const { status, close } = await start({ VOLTA_NEWSLETTER_HOME: data, DEMO_NOW: "2026-10-01T11:30:00Z" });
+    try {
+      expect(await status()).toContain("Period: 2026-10");
+      expect(existsSync(join(data, "newsletter.sqlite"))).toBe(true);
+      expect(existsSync(join(cwd, "checkout.sqlite"))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
   it("reads a .env in the data directory, which is how a scheduled run gets its settings", async () => {
     const data = join(dir, "data");
     mkdirSync(data, { recursive: true });

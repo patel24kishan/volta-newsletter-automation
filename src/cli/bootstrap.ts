@@ -8,7 +8,8 @@ import { ConsoleFileAlerter } from "../alerts.js";
 import { resolveClock, type Clock } from "../clock.js";
 import { loadConfig, type Config } from "../config.js";
 import { fetchText } from "../http.js";
-import { envFilesToLoad, resolvePaths, type PathOptions, type Paths } from "../install/paths.js";
+import { join } from "node:path";
+import { DATA_DIR_ENV, envFilesToLoad, resolvePaths, unset, type PathOptions, type Paths } from "../install/paths.js";
 import type { NewsletterDeps } from "../mcp/newsletter-server.js";
 import { mailchimpFromEnv } from "../publish/mailchimp.js";
 import { runWeek } from "../run-week.js";
@@ -32,10 +33,18 @@ export interface Bootstrap {
 }
 
 /**
- * Loads the .env files that exist (working directory first, then the data directory) into
- * process.env. A variable already set in the environment is never overridden.
+ * Loads the .env files that exist into process.env. A variable already set in the environment
+ * is never overridden. When the data directory is named in the environment itself
+ * (VOLTA_NEWSLETTER_HOME), only that directory's .env is read: the working directory's belongs
+ * to whatever checkout the command happened to be run from, and once let a run meant for a
+ * throwaway folder open the checkout's real database through the DATABASE_PATH in its .env.
  */
 export function loadEnvFiles(env: NodeJS.ProcessEnv, cwd: string, o: PathOptions = {}): string[] {
+  if (!unset(env[DATA_DIR_ENV])) {
+    const only = envFilesToLoad(cwd, resolvePaths(env, o).dataDir).filter((f) => f !== join(cwd, ".env"));
+    for (const f of only) loadDotEnv(f);
+    return only;
+  }
   const first = envFilesToLoad(cwd, resolvePaths(env, o).dataDir);
   for (const f of first) loadDotEnv(f);
   // The working directory's .env may itself name the data directory, so look there again.
@@ -44,7 +53,7 @@ export function loadEnvFiles(env: NodeJS.ProcessEnv, cwd: string, o: PathOptions
   return [...first, ...after];
 }
 
-export async function createDeps(o: { env: NodeJS.ProcessEnv; argv?: string[]; paths?: PathOptions; log?: (line: string) => void }): Promise<Bootstrap> {
+export async function createDeps(o: { env: NodeJS.ProcessEnv; argv?: string[]; paths?: PathOptions; log?: (line: string) => void; reminderRoute?: NewsletterDeps["reminderRoute"] }): Promise<Bootstrap> {
   const { env } = o;
   const log = o.log ?? ((line: string) => console.error(`volta-newsletter: ${line}`));
   const paths = resolvePaths(env, o.paths ?? {});
@@ -79,6 +88,8 @@ export async function createDeps(o: { env: NodeJS.ProcessEnv; argv?: string[]; p
     ...(mail.publisher ? { publisher: mail.publisher } : {}),
     ...(mail.problem ? { publisherProblem: mail.problem } : {}),
     ...(audience ? { audience } : {}),
+    ...(o.reminderRoute ? { reminderRoute: o.reminderRoute } : {}),
+    platform: process.platform,
     preview: () => (preview ??= startPreviewServer().catch((e: unknown) => {
       log(`preview not available: ${(e as Error).message}`);
       return undefined;

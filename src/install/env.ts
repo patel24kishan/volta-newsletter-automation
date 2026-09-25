@@ -23,6 +23,8 @@ export const ENV_VARS: readonly EnvVar[] = [
   { name: "CONFIG_PATH", curator: false, secret: false, what: "Your own sources, timezone and holidays file; the packaged config when empty." },
   { name: "DATABASE_PATH", curator: false, secret: false, what: "The SQLite file; inside the data folder when empty." },
   { name: "OUT_DIR", curator: false, secret: false, what: "Built drafts and the alerts log; the data folder when empty." },
+  { name: "VOLTA_NEWSLETTER_NOTIFIER", curator: false, secret: false, what: "\"none\" switches the reminder command's desktop notification off (tests, CI)." },
+  { name: "VOLTA_NOTIFY_APPID", curator: false, secret: false, what: "Windows only: the app the reminder's notification appears to come from. Claude's when it is installed; PowerShell's otherwise." },
   { name: "DEMO_NOW", curator: false, secret: false, what: "Run as if it were this moment (ISO 8601). Dry run only." },
   { name: "ALLOW_LIVE_WITH_DEMO_CLOCK", curator: false, secret: false, what: "1 to allow a live run with DEMO_NOW set, for a deliberate live demo." },
 ];

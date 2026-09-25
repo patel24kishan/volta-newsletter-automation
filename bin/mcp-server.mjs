@@ -10,6 +10,8 @@ import { register } from "tsx/esm/api";
 
 const root = resolve(import.meta.dirname, "..");
 process.chdir(root);
+// The checkout's .env first: naming the data directory below makes the server skip it.
+try { process.loadEnvFile(resolve(root, ".env")); } catch { /* no .env is fine */ }
 process.env.VOLTA_NEWSLETTER_HOME ??= resolve(root, "out");
 process.env.CONFIG_PATH ??= resolve(root, "demo/config.json");
 

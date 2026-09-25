@@ -3,6 +3,7 @@
  * The package's command: what `npx volta-newsletter` runs.
  *
  *   volta-newsletter [serve]     the MCP server over stdio (what a host's config points at)
+ *   volta-newsletter reminder    the monthly reminder, for an OS scheduler to run each morning
  *   volta-newsletter --version
  *   volta-newsletter --help
  *
@@ -15,6 +16,7 @@ import { nodeVersionProblem } from "../install/node-check.js";
 const HELP = `volta-newsletter: a monthly newsletter reviewed inside your assistant.
 
   volta-newsletter [serve]   start the MCP server over stdio (this is what a host runs)
+  volta-newsletter reminder  run the monthly reminder once; for Task Scheduler, cron or launchd
   volta-newsletter --version
   volta-newsletter --help
 
@@ -28,6 +30,13 @@ if (args.includes("--help") || args.includes("-h")) {
 } else if (args.includes("--version") || args.includes("-v")) {
   const pkg = createRequire(import.meta.url)("../../package.json") as { version: string };
   console.log(pkg.version);
+} else if (command === "reminder") {
+  const problem = nodeVersionProblem(process.version);
+  if (problem) {
+    console.error(problem);
+    process.exit(1);
+  }
+  process.exitCode = await (await import("./reminder.js")).reminderMain();
 } else if (command !== "serve") {
   console.error(`volta-newsletter: unknown command "${command}". Try --help.`);
   process.exit(2);
